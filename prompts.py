@@ -19,3 +19,30 @@ prompts={
              "Also, include how to assign the {container} a static IP, install a {function} on that {container} and {additional_command}. Also, include how to set the CPU and RAM as user want.",
     ]
 }
+
+system_container_list= [['Kubernetes', 'container'], ['OpenStack', 'VM']]
+
+#container_list = ['container', 'VM']
+
+node_name_list = ['kubeworker1', 'kubeworker2', 'kubeworker3']
+
+function_list = ['firewall', 'Haproxy', 'nDPI', 'ntopng', 'Suricata']
+
+additional_command_list = {'firewall': 
+                           ['configures it to allow only IPs in the specific subnet to pass through', 
+                            'configures it to block all traffic except for the specific subnet', 
+                            'configures it to allow only specific ports to pass through', 
+                            'configures it to block all traffic except for specific ports'],
+                           'Haproxy':
+                           ['Haproxy can be installed with apt. Configures it to load balance between the specific servers',
+                            'Haproxy can be installed with apt. Configures it to redirect traffic to the specific server',
+                            'Haproxy can be installed with apt. Configures it to cache the specific content',
+                            'Haproxy can be installed with apt. Configures it to allow only specific ports to pass through'],
+                           'nDPI':
+                           ['nDPI can be installed with git. Configures it inspect the packtes of a specific subnet',
+                            'nDPI can be installed with git. Configures it to block the specific traffic'],
+                           'ntopng':
+                           ['ntopng can be installed with apt. Configures it to report the usage by protocol'],
+                           'Suricata':
+                           ['Suricata can be installed with apt. Please set the most basic rules and set them to work']
+}
