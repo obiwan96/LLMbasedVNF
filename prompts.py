@@ -8,41 +8,42 @@ prompts={
     "Create an Ansible YAML script that installs a container on the 'kubeworker1' Kubernetes node with 2 GB of RAM and 2 CPUs, assigns the container the IP '192.168.2.2', and configures a firewall on the node to accept connections only from the '192.168.2.0/24' subnet."
     ],
     'mop' : ["Please write an MOP (Method of Procedure) file about that installing a {container} in"+
-             " the node named '{nodename}' in {system}, assigns the IP to that, installing a {function}, and {additional_command}."+
-             "Please also write down how to set cpu or ram as user want.",
+             " the specific node in {system}, assigns the IP to that, installing a {function}, and {additional_command}."+
+             "Please also include how to set cpu or ram as user want.",
              
              "Please create an MOP (Method of Procedure) that describe everything that goes through the following process in detail."+
-             " Deploys a {container} with specific memory of RAM and specific number of CPUs on the {system} node '{nodename}'."+
-             " Set the IP address to specific ip address, additionally, install a {function} on the node and {additional_command}.",
+             " Deploys a {container} with specific memory of RAM and specific number of CPUs on the {system}. User must can designate the speicifc node name."+
+             " Set the IP address to specific ip address, additionally, install a {function} on the node and {additional_command}."
              
-             "Write an MOP (Method of Procedure) to deploy a {system} {container} on the node '{nodename}. "+
-             "Also, include how to assign the {container} a static IP, install a {function} on that {container} and {additional_command}. Also, include how to set the CPU and RAM as user want.",
+            # "Write an MOP (Method of Procedure) to deploy a {system} {container} on the specific node. "+
+             #"Also, include how to assign the {container} a static IP, install a {function} on that {container} and {additional_command}. Also, include how to set the CPU and RAM as user want.",
     ]
 }
 
-system_container_list= [['Kubernetes', 'container'], ['OpenStack', 'VM']]
+#system_container_list= [['Kubernetes', 'container'], ['OpenStack', 'VM']]
+system_container_list= [['OpenStack', 'VM']]
 
 #container_list = ['container', 'VM']
 
-node_name_list = ['kubeworker1', 'kubeworker2', 'kubeworker3']
+#node_name_list = ['kubeworker1', 'kubeworker2', 'kubeworker3']
 
-function_list = ['firewall', 'Haproxy', 'nDPI', 'ntopng', 'Suricata']
+function_list = ['firewall using "using iptables"', 'Haproxy', 'nDPI', 'ntopng', 'Suricata']
 
 additional_command_list = {'firewall': 
-                           ['configures it to allow only IPs in the specific subnet to pass through', 
-                            'configures it to block all traffic except for the specific subnet', 
-                            'configures it to allow only specific ports to pass through', 
-                            'configures it to block all traffic except for specific ports'],
+                           ['configures it to allow only IPs in the specific subnet to pass through ussing firewall', 
+                            'configures it to block all traffic except for the specific subnet ussing firewall', 
+                            'configures it to allow only specific ports to pass through ussing firewall', 
+                            'configures it to block all traffic except for specific ports ussing firewall'],
                            'Haproxy':
                            ['Haproxy can be installed with apt. Configures it to load balance between the specific servers',
                             'Haproxy can be installed with apt. Configures it to redirect traffic to the specific server',
-                            'Haproxy can be installed with apt. Configures it to cache the specific content',
+                            #'Haproxy can be installed with apt. Configures it to cache the specific content',
                             'Haproxy can be installed with apt. Configures it to allow only specific ports to pass through'],
                            'nDPI':
-                           ['nDPI can be installed with git. Configures it inspect the packtes of a specific subnet',
-                            'nDPI can be installed with git. Configures it to block the specific traffic'],
+                           ['nDPI can be installed with git. Configures it inspect the packtes of a specific subnet using nDPI',
+                            'nDPI can be installed with git. Configures it to block the specific traffic using nDPI, not ufw.'],
                            'ntopng':
-                           ['ntopng can be installed with apt. Configures it to report the usage by protocol'],
+                           ['ntopng can be installed with apt. Configures it to report the usage by protocol using ntopng'],
                            'Suricata':
                            ['Suricata can be installed with apt. Please set the most basic rules and set them to work']
 }

@@ -2,6 +2,7 @@ from openai import OpenAI
 from secret import OPENAI_API_KEY, KUBER_PASSWORD
 from prompts import *
 import re
+import os
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 data_path='data/'
@@ -55,16 +56,29 @@ def make_ansible(success_count = 1):
     print(f'Total {success_count-1} YAML files have been created and executed successfully.')
 
 def make_mop():
-    import aspose.words as aw
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    example_mop_path='data/Example/'
+    example_mop_list = os.listdir(example_mop_path)
+    example_mop='Here are the example MOP files.\n'
+    for example_mop_file_name in example_mop_list:
+        doc = Document(example_mop_path+example_mop_file_name)
+        for para in doc.paragraphs:
+            example_mop+=para.text+'\n'
     total_num_file=0
-    for system_container in system_container_list:
-        system, container = system_container
-        for function in function_list:
-            last_num=1
-            for node_name in node_name_list:
+    for lang in ['en', 'ko']:
+        for system_container in system_container_list:
+            system, container = system_container
+            for function in function_list:
+                last_num=1
                 for additional_command in additional_command_list[function]:
                     for prompt in prompts['mop']:
-                        formatted_prompt = prompt.format(system=system, container=container, nodename=node_name, function=function, additional_command=additional_command)
+                        formatted_prompt = example_mop+prompt.format(system=system, container=container, 
+                            function=function, additional_command=additional_command)
+                        if lang=='ko':
+                            formatted_prompt+='Please write in Korean'
+                        if system=='OpenStack':
+                            formatted_prompt+='Also, do not use the GUI(Horizon), use the CLI.'
                         response = openai_client.chat.completions.create(
                             model = 'gpt-4o-mini', messages=[
                                 {"role" : "system", "content" : f'You are an expert in {system} management.'},
@@ -73,12 +87,18 @@ def make_mop():
                         content=response.choices[0].message.content
                         #print(content)
                         #print('-------------------')
-                        mop_file_path = data_path+f"{system}_{function}_setup_{last_num}.docx"
-                        doc = aw.Document()
-                        builder = aw.DocumentBuilder(doc)
-                        builder.write(content)
+                        mop_file_path = data_path+f"{system}_{function}_setup_{lang}_withExample_{last_num}.docx"
+                        last_num+=1
+                        doc = Document()
+                        for line in content.split('\n'):
+                            if line:
+                                if line.startswith('#'):
+                                    head_num=line.count('#')
+                                    doc.add_heading(line[head_num:], level=head_num)
+                                else:
+                                    doc.add_paragraph(line)
                         doc.save(mop_file_path)
-                        total_num_file
+                        total_num_file+=1
 
     print(f'Total {total_num_file} doc files have been created.')
 make_mop()
