@@ -75,10 +75,15 @@ def make_mop():
                     for prompt in prompts['mop']:
                         formatted_prompt = example_mop+prompt.format(system=system, container=container, 
                             function=function, additional_command=additional_command)
+                        if function=='firewall':
+                            formatted_prompt+=' Use iptables operation.'
                         if lang=='ko':
                             formatted_prompt+='Please write in Korean'
                         if system=='OpenStack':
-                            formatted_prompt+='Also, do not use the GUI(Horizon), use the CLI.'
+                            formatted_prompt+='Also, do not use the GUI(Horizon), use the CLI. '+ \
+                                'Instead of setting floating IP on the created VM, use the Jump Host, '+ \
+                                'which can connect to the internal VM, to connect to the newly created VM with SSH '+ \
+                                'and operate the shell commands in SSH connection.'
                         response = openai_client.chat.completions.create(
                             model = 'gpt-4o-mini', messages=[
                                 {"role" : "system", "content" : f'You are an expert in {system} management.'},

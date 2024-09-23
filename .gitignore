@@ -1,4 +1,8 @@
 llm_based_config/clouds.yaml
+llm_based_config/OpenStack_Conf
+*/secret.py
+*/log.txt
+Example_Code/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

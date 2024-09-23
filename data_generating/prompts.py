@@ -27,18 +27,18 @@ system_container_list= [['OpenStack', 'VM']]
 
 #node_name_list = ['kubeworker1', 'kubeworker2', 'kubeworker3']
 
-function_list = ['firewall using "using iptables"', 'Haproxy', 'nDPI', 'ntopng', 'Suricata']
+function_list = ['firewall', 'Haproxy', 'nDPI', 'ntopng', 'Suricata']
 
 additional_command_list = {'firewall': 
                            ['configures it to allow only IPs in the specific subnet to pass through ussing firewall', 
-                            'configures it to block all traffic except for the specific subnet ussing firewall', 
-                            'configures it to allow only specific ports to pass through ussing firewall', 
+                            #'configures it to block all traffic except for the specific subnet ussing firewall', 
+                            #'configures it to allow only specific ports to pass through ussing firewall', 
                             'configures it to block all traffic except for specific ports ussing firewall'],
                            'Haproxy':
                            ['Haproxy can be installed with apt. Configures it to load balance between the specific servers',
-                            'Haproxy can be installed with apt. Configures it to redirect traffic to the specific server',
+                            'Haproxy can be installed with apt. Configures it to redirect traffic to the specific server'],
                             #'Haproxy can be installed with apt. Configures it to cache the specific content',
-                            'Haproxy can be installed with apt. Configures it to allow only specific ports to pass through'],
+                            #'Haproxy can be installed with apt. Configures it to allow only specific ports to pass through'],
                            'nDPI':
                            ['nDPI can be installed with git. Configures it inspect the packtes of a specific subnet using nDPI',
                             'nDPI can be installed with git. Configures it to block the specific traffic using nDPI, not ufw.'],
