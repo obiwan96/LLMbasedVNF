@@ -15,9 +15,10 @@ from tqdm import tqdm
 import io
 from datetime import datetime
 import sys
+import paramiko
 
-def test_response(llm_response, vnf, model, vm_num, cloud_name):
-    config_file_path = 'OpenStack_Conf/' 
+config_file_path = 'OpenStack_Conf/' 
+def test_creaation(llm_response, vnf, model, vm_num):
     code_pattern = r'```python(.*?)```'
     code_pattern_second = r'```(.*?)```'
     try:
@@ -26,9 +27,9 @@ def test_response(llm_response, vnf, model, vm_num, cloud_name):
             python_code = re.findall(code_pattern_second, llm_response, re.DOTALL)
     except:
         #print('parsing fail')
-        return "I can't see Python code in your response."
+        return False, "I can't see Python code in your response."
     if not python_code:
-        return "I can't see Python code in your response."
+        return False, "I can't see Python code in your response."
     file_name = f'config_{vnf}_{model.replace(".","")}_{vm_num}.py'
     with open(config_file_path + file_name, 'w') as f:
         f.write(python_code[0])
@@ -43,16 +44,97 @@ def test_response(llm_response, vnf, model, vm_num, cloud_name):
             captured_output = output_capture.getvalue()
             output_capture.close()
         except Exception as e:
-            return e
+            return False, e
         if server:
-            print(f"VM created successfully with name: {server.name}")
-            try:
+            #print(f"VM created successfully with name: {server.name}")
+            '''try:
                 conn = openstack.connect(cloud=cloud_name)
                 conn.delete_server(server.id)
-                conn.delete_server(server.name)
             except:
-                pass
+                pass'''
+            return True, server
+    except Exception as e:
+        #print(e)
+        #print('VM creation failed')
+        return False, e
+    if captured_output:
+        return False, captured_output
+    return False, 'Some reason, VM creation failed.'
+
+def vm_ssh_config_check(vm_ssh, input, output, exactly=False):
+    stdin, stdout, stderr = vm_ssh.exec_command(input)
+    if exactly:
+        msg = stdout.read().decode("utf-8").strip()
+        if msg == output:
             return True
+    else:
+        msg = stdout.read().decode("utf-8")
+        if output in msg:
+            return True
+    return False
+
+def test_configration(server, vnf, model, vm_num):
+    file_name = f'config_{vnf}_{model.replace(".","")}_{vm_num}.py'
+    try:
+        config_vm = __import__(config_file_path[:-1] + '.' + file_name[:-3],fromlist=['config_vm'])
+        try:
+            output_capture = io.StringIO()
+            sys.stdout = output_capture
+            result = config_vm.config_vm(server)
+            sys.stdout = sys.__stdout__
+            captured_output = output_capture.getvalue()
+            output_capture.close()
+        except Exception as e:
+            return e
+        if result:
+            vm_ip = server.addresses['NI-management'][0]['addr']
+            jump_host_ssh = paramiko.SSHClient()
+            jump_host_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            jump_host_ssh.connect(JUMP_HOST_IP, username='ubuntu', password=JUMP_HOST_PWD)# Create an SSH tunnel to the VM
+            vm_ssh = paramiko.SSHClient()
+            vm_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            jump_host_transport = jump_host_ssh.get_transport()
+            dest_addr = (vm_ip, 22)
+            local_addr = ('127.0.0.1', 22)
+            vm_channel = jump_host_transport.open_channel("direct-tcpip", dest_addr, local_addr)
+            vm_ssh.connect(vm_ip, username='ubuntu', sock=vm_channel)
+
+           ############################################
+           # Simply check if the VNF is running well. #
+           # Somedays, need to check more detailly.   #
+           ############################################
+            if vnf == 'firewall':
+                if vm_ssh_config_check(vm_ssh, 'sudo iptables -L -v -n', 'DROP'):
+                    vm_ssh.close()
+                    jump_host_ssh.close()
+                    return True
+            elif vnf == 'Haproxy':
+                if vm_ssh_config_check(vm_ssh, 'systemctl is-active haproxy', 'active', exactly=True):
+                    if vm_ssh_config_check(vm_ssh, 'haproxy -c -f /etc/haproxy/haproxy.cfg', 'Configuration file is valid'):
+                        vm_ssh.close()
+                        jump_host_ssh.close()
+                        return True
+            elif vnf == 'nDPI':
+                if vm_ssh_config_check(vm_ssh, 'ps aux', 'ndpiReader'):
+                    vm_ssh.close()
+                    jump_host_ssh.close()
+                    return True
+            elif vnf == 'ntopng':
+                if vm_ssh_config_check(vm_ssh, 'ps aux', 'ntopng'):
+                    vm_ssh.close()
+                    jump_host_ssh.close()
+                    return True
+            elif vnf == 'Suricata':
+                if vm_ssh_config_check(vm_ssh, 'systemctl is-active suricata', 'active', exactly=True):
+                    vm_ssh.close()
+                    jump_host_ssh.close()
+                    return True
+            else:
+                print('weried...')
+            vm_ssh.close()
+            jump_host_ssh.close()
+            # Close SSH connections
+            return 'Some reasons, VNF configuration failed.'
     except Exception as e:
         #print(e)
         #print('VM creation failed')
@@ -63,6 +145,7 @@ def test_response(llm_response, vnf, model, vm_num, cloud_name):
 
 def delete_vms_after(conn, target_time):
     servers = conn.compute.servers(details=True)
+    #print(f'target time: {target_time}')
     deleted_count = 0
     for server in servers:
         created_at = server.created_at
@@ -71,6 +154,8 @@ def delete_vms_after(conn, target_time):
             #print(f"Deleting VM {server.name} (Created at: {created_at})")
             conn.compute.delete_server(server.id)
             deleted_count += 1
+        #else:
+        #    print(f"VM (Created at: {created_at}), name : {server.name} is not deleted")
     #print (f"Deleted {deleted_count} VMs")
 
 if __name__ == '__main__':
@@ -99,7 +184,7 @@ if __name__ == '__main__':
     "and return False if it fails. And make the part in charge of VNF configuration as a function of 'cofig_vm'. " + \
     "'config_vm' takes the 'server object' as a input and returns True if the configuration is successful, and False if it fails. "+ \
     "In this way, I hope that the same process as MOP will be performed by continuously executing the 'create_vm' function and 'config_vm'. " + \
-    "Don't put usage or example \n" + \
+    "Don't seperate two fucntions, put in same code block, and don't put usage or example in the block.\n" + \
     f"Use '{image_name}' image, '{flavor_name}' flavor, {network_name} network. \n" + \
     "If you need access to the inside of the VM for internal VM settings, instead of setting floating IP on the created VM, "+ \
     "use the Jump Host, which can connect to the internal VM, " +\
@@ -109,22 +194,25 @@ if __name__ == '__main__':
     
     logging_file = 'log.txt'
     model_list= ["gpt-3.5-turbo", "gpt-4o", "llama2", "llama3", "llama3.1:70b", "qwen2", "qwen2:72b", "gemma2", "gemma2:27b"]
-    model_list=["gpt-4o"]
     all_mop_num = len(mop_list)
     first_create_success_num = {}
+    first_config_success_num = {}
     create_success_num = {'ko':{}, 'en':{}}
-    config_success_num = {} # Not Yet Implemented
+    config_success_num = {'ko':{}, 'en':{}}
     success_num_by_vnf={}
     process_time = {}
     for model in model_list:
         first_create_success_num[model] = 0
+        first_config_success_num[model] = 0
         create_success_num['ko'][model] = 0
         create_success_num['en'][model] = 0
+        config_success_num['ko'][model] = 0
+        config_success_num['en'][model] = 0
         process_time[model] = []
     vm_num = {}
     total_start_time = time.time() 
     target_datetime = datetime.now(pytz.utc)
-    for mop_file in tqdm(mop_list[:5]):
+    for mop_file in tqdm(mop_list):
         vnf = mop_file.split('_')[1]
         lang = mop_file.split('_')[3]
         if vnf not in vm_num:
@@ -132,7 +220,7 @@ if __name__ == '__main__':
         else:
             vm_num[vnf] += 1
         if vnf not in success_num_by_vnf:
-            success_num_by_vnf[vnf] = {'total_num' : 1, 'create_success_num': 0}
+            success_num_by_vnf[vnf] = {'total_num' : 1, 'success_num': 0}
         else:
             success_num_by_vnf[vnf]['total_num'] += 1
         
@@ -157,33 +245,52 @@ if __name__ == '__main__':
             llm_response=chat.invoke(prompts+mop)['response']
             #print(llm_response)
             for _ in range(maximum_tiral):
+                already_success = False
                 if logging:
                     with open(logging_file, 'a') as f:
                         f.write(f" --- Trial: {_+1}\n")
                         f.write(llm_response+'\n\n')
-                test_result = test_response(llm_response, vnf, model, vm_num[vnf], cloud_name)
+                test_result, server_or_message = test_creaation(llm_response, vnf, model, vm_num[vnf])
                 sys.stdout = sys.__stdout__
                 if test_result == True:
-                    create_success_num[lang][model] += 1
-                    process_time[model].append(time.time()-start_time)
-                    if logging:
-                        with open(logging_file, 'a') as f:
-                            f.write('Test succeed\n')
-                    if _>0:
-                        print(f"succeed after {_+1} times trial")
-                    else:
+                    if not already_success:
+                        create_success_num[lang][model] += 1
+                        already_success = True
+                    #if _>0:
+                    #    print(f"succeed after {_+1} times trial")
+                    if _ == 0:
                         first_create_success_num[model] += 1
-                    success_num_by_vnf[vnf]['create_success_num'] += 1
-                    break
+                    
+                    second_test_result = test_configration(server_or_message, vnf, model, vm_num[vnf])
+                    conn = openstack.connect(cloud=cloud_name)
+                    conn.delete_server(server_or_message.id)
+                    if second_test_result == True:
+                        process_time[model].append(time.time()-start_time)
+                        success_num_by_vnf[vnf]['success_num'] += 1
+                        config_success_num[lang][model] += 1
+                        if _ == 0:
+                            first_config_success_num[model] += 1
+                        if logging:
+                            with open(logging_file, 'a') as f:
+                                f.write('Test succeed\n')
+                        break
+                    else:
+                        if _ < maximum_tiral-1:
+                            if logging:
+                                with open(logging_file, 'a') as f:
+                                    f.write('Config test failled. Results:\n')
+                                    f.write(str(server_or_message)+'\n')
+                            llm_response=chat.invoke('When I run your code, I can successfully create VM, '+ \
+                                'but VNF configuration is failed. got this error message. Please fix it.\n'+str(server_or_message))['response']
                 else:
                     if _ < maximum_tiral-1:
                         #print(test_result)
                         #print(f'{_+2} try')
                         if logging:
                             with open(logging_file, 'a') as f:
-                                f.write('Test failled. Results:\n')
-                                f.write(str(test_result)+'\n')
-                        llm_response=chat.invoke('When I run your code, I got this error message. Please fix it.\n'+str(test_result))['response']
+                                f.write('Creation test failled. Results:\n')
+                                f.write(str(server_or_message)+'\n')
+                        llm_response=chat.invoke('When I run your code, I got this error message. Please fix it.\n'+str(server_or_message))['response']
             # Delete all VMs created after the target time
             conn = openstack.connect(cloud=cloud_name)
             delete_vms_after(conn, target_datetime)
@@ -191,12 +298,16 @@ if __name__ == '__main__':
     print(f"Total MOPs: {all_mop_num}")
     for model in model_list:
         print(f"Model: {model},")
-        print(f"First success: {first_create_success_num[model]}")
-        print(f"Korean MOP success: {create_success_num['ko'][model]}")
-        print(f"English MOP success: {create_success_num['en'][model]}")
-        print(f"Total Success: {create_success_num['ko'][model]+create_success_num['en'][model]}")
+        print(f"First VM Create success: {first_create_success_num[model]}")
+        print(f"Korean MOP - VM Create success: {create_success_num['ko'][model]}")
+        print(f"English MOP - VM Create success: {create_success_num['en'][model]}")
+        print(f"Total VM Create Success: {create_success_num['ko'][model]+create_success_num['en'][model]}")
+        print(f"First VNF Config success: {first_config_success_num[model]}")
+        print(f"Korean MOP - VNF Config success: {config_success_num['ko'][model]}")
+        print(f"English MOP - VNF Config success: {config_success_num['en'][model]}")
+        print(f"Total VNF Config Success: {config_success_num['ko'][model]+config_success_num['en'][model]}")
         if len(process_time[model]) > 0:
             print(f"Average process time: {sum(process_time[model])/len(process_time[model])} seconds")
     for vnf in success_num_by_vnf:
-        print(f"VNF: {vnf}, Total MOPs: {success_num_by_vnf[vnf]['total_num']}, Success: {success_num_by_vnf[vnf]['create_success_num']}")
+        print(f"VNF: {vnf}, Total MOPs: {success_num_by_vnf[vnf]['total_num']}, Success: {success_num_by_vnf[vnf]['success_num']}")
     print(f'Total execution time:{(end_time-total_start_time)/60} minutes')
