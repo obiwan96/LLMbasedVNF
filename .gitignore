@@ -4,6 +4,8 @@ llm_based_config/OpenStack_Conf
 */log.txt
 */test.py
 Example_Code/
+Good_Example/
+Bad Example/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

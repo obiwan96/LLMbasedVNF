@@ -16,9 +16,12 @@ import io
 from datetime import datetime
 import sys
 import paramiko
+import logging
+import time
 
-config_file_path = 'OpenStack_Conf/' 
-def test_creaation(llm_response, vnf, model, vm_num):
+config_file_path = 'OpenStack_Conf/'
+logging.getLogger("paramiko").setLevel(logging.CRITICAL) 
+def test_creation(llm_response, vnf, model, vm_num):
     code_pattern = r'```python(.*?)```'
     code_pattern_second = r'```(.*?)```'
     try:
@@ -73,7 +76,47 @@ def vm_ssh_config_check(vm_ssh, input, output, exactly=False):
             return True
     return False
 
+def wait_for_destination_ssh(ssh, destination_host, ssh_username, ssh_password):
+    stdin, stdout, stderr = ssh.exec_command(f"ssh-keygen -R {destination_host}")
+    trial=0
+    while True:
+        trial+=1
+        try:
+            # Create an SSH session from the jump host to the destination server
+            jump_transport = ssh.get_transport()
+            dest_addr = (destination_host, 22)
+            local_addr = (JUMP_HOST_IP, 22)
+
+            # Open a direct TCP channel to the destination server
+            jump_channel = jump_transport.open_channel("direct-tcpip", dest_addr, local_addr)
+            
+            # Create a new SSH client to connect to the destination through the jump host
+            ssh_dest = paramiko.SSHClient()
+            ssh_dest.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+            # Try connecting to the destination server
+            ssh_dest.connect(destination_host, username=ssh_username, password=ssh_password, sock=jump_channel)
+            ssh_dest.close()
+            return True
+        except:
+            time.sleep(5)
+        if trial > 35:
+            print('another reason, can not ssh to VM via jump host.')
+            return False
+
+
 def test_configration(server, vnf, model, vm_num):
+    jump_host_ssh = paramiko.SSHClient()
+    jump_host_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    jump_host_ssh.connect(JUMP_HOST_IP, username='ubuntu', password=JUMP_HOST_PWD)
+    try:
+        vm_ip = server.addresses['NI-management'][0]['addr']
+    except:
+        jump_host_ssh.close()
+        return "VM is created, but didn't connect to 'NI-management' network."
+    if not wait_for_destination_ssh(jump_host_ssh,vm_ip, 'ubuntu', 'ubuntu'):
+        jump_host_ssh.close()
+        return 'Error: Can not SSH to VM with jump host.'
     file_name = f'config_{vnf}_{model.replace(".","")}_{vm_num}.py'
     try:
         config_vm = __import__(config_file_path[:-1] + '.' + file_name[:-3],fromlist=['config_vm'])
@@ -85,19 +128,16 @@ def test_configration(server, vnf, model, vm_num):
             captured_output = output_capture.getvalue()
             output_capture.close()
         except Exception as e:
+            jump_host_ssh.close()
             return e
         if result:
-            vm_ip = server.addresses['NI-management'][0]['addr']
-            jump_host_ssh = paramiko.SSHClient()
-            jump_host_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            jump_host_ssh.connect(JUMP_HOST_IP, username='ubuntu', password=JUMP_HOST_PWD)# Create an SSH tunnel to the VM
             vm_ssh = paramiko.SSHClient()
             vm_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             jump_host_transport = jump_host_ssh.get_transport()
             dest_addr = (vm_ip, 22)
             local_addr = ('127.0.0.1', 22)
             vm_channel = jump_host_transport.open_channel("direct-tcpip", dest_addr, local_addr)
-            vm_ssh.connect(vm_ip, username='ubuntu', sock=vm_channel)
+            vm_ssh.connect(vm_ip, username='ubuntu', password= 'ubuntu', sock=vm_channel)
 
            ############################################
            # Simply check if the VNF is running well. #
@@ -134,11 +174,15 @@ def test_configration(server, vnf, model, vm_num):
             vm_ssh.close()
             jump_host_ssh.close()
             # Close SSH connections
-            return 'Some reasons, VNF configuration failed.'
+            return 'Your code is run, but VNF is not installed correctly.'
     except Exception as e:
         #print(e)
         #print('VM creation failed')
+        if result:
+            vm_ssh.close()
+        jump_host_ssh.close()
         return e
+    jump_host_ssh.close()
     if captured_output:
         return captured_output
     return 'Some reason, VM creation failed.'
@@ -163,7 +207,7 @@ if __name__ == '__main__':
     mop_file_path = '../mop/OpenStack_v1/'
     mop_list = os.listdir(mop_file_path)
     os.environ['OPENAI_API_KEY'] = OPENAI_API_KEY
-    logging = True
+    logging_ = True
     #openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
     flavor_name = 'vnf.generic.2.1024.10G'
@@ -171,6 +215,7 @@ if __name__ == '__main__':
     network_name = "'NI-data' and 'NI-management'"
     cloud_name = 'postech_cloud'
     maximum_tiral = 3 # Two more chance.
+    conn = openstack.connect(cloud=cloud_name)
     
     prompts = 'You are an OpenStack cloud expert. ' +  \
     'Here is example code to create a VM in OpenStack using python with openstacksdk. '+ \
@@ -186,6 +231,7 @@ if __name__ == '__main__':
     "In this way, I hope that the same process as MOP will be performed by continuously executing the 'create_vm' function and 'config_vm'. " + \
     "Don't seperate two fucntions, put in same code block, and don't put usage or example in the block.\n" + \
     f"Use '{image_name}' image, '{flavor_name}' flavor, {network_name} network. \n" + \
+    "Don't make key pair in OpenStack, don't use stdin to get any kind of password. \n"
     "If you need access to the inside of the VM for internal VM settings, instead of setting floating IP on the created VM, "+ \
     "use the Jump Host, which can connect to the internal VM, " +\
     " to connect to the newly created VM with SSH. Here is the Jump Host information. \n" + \
@@ -194,6 +240,7 @@ if __name__ == '__main__':
     
     logging_file = 'log.txt'
     model_list= ["gpt-3.5-turbo", "gpt-4o", "llama2", "llama3", "llama3.1:70b", "qwen2", "qwen2:72b", "gemma2", "gemma2:27b"]
+    #model_list= ["gpt-3.5-turbo", "gpt-4o", "llama3"]
     all_mop_num = len(mop_list)
     first_create_success_num = {}
     first_config_success_num = {}
@@ -232,7 +279,7 @@ if __name__ == '__main__':
         for para in doc.paragraphs:
             mop += para.text + '\n'
         for model in model_list:
-            if logging:
+            if logging_:
                 with open(logging_file, 'a') as f:
                     f.write(f" --- Model: {model}, MOP: {mop_file}, VNF: {vnf}, VM: {vm_num[vnf]}\n")
             start_time = time.time() 
@@ -244,15 +291,18 @@ if __name__ == '__main__':
             #llm_response=llm.invoke(prompts+mop)
             llm_response=chat.invoke(prompts+mop)['response']
             #print(llm_response)
+            already_success = False
             for _ in range(maximum_tiral):
-                already_success = False
-                if logging:
+                if logging_:
                     with open(logging_file, 'a') as f:
                         f.write(f" --- Trial: {_+1}\n")
                         f.write(llm_response+'\n\n')
-                test_result, server_or_message = test_creaation(llm_response, vnf, model, vm_num[vnf])
+                test_result, server_or_message = test_creation(llm_response, vnf, model, vm_num[vnf])
                 sys.stdout = sys.__stdout__
                 if test_result == True:
+                    server = conn.compute.wait_for_server(server_or_message)
+                    # VM creation success.
+                    # Now, test the configuration
                     if not already_success:
                         create_success_num[lang][model] += 1
                         already_success = True
@@ -262,7 +312,6 @@ if __name__ == '__main__':
                         first_create_success_num[model] += 1
                     
                     second_test_result = test_configration(server_or_message, vnf, model, vm_num[vnf])
-                    conn = openstack.connect(cloud=cloud_name)
                     conn.delete_server(server_or_message.id)
                     if second_test_result == True:
                         process_time[model].append(time.time()-start_time)
@@ -270,29 +319,31 @@ if __name__ == '__main__':
                         config_success_num[lang][model] += 1
                         if _ == 0:
                             first_config_success_num[model] += 1
-                        if logging:
+                        if logging_:
                             with open(logging_file, 'a') as f:
                                 f.write('Test succeed\n')
+                        print(f'VM creation and configuration both Succeed! model: {model}, vnf: {vnf}')
                         break
                     else:
+                        # VM Config test failed.
                         if _ < maximum_tiral-1:
-                            if logging:
+                            if logging_:
                                 with open(logging_file, 'a') as f:
                                     f.write('Config test failled. Results:\n')
-                                    f.write(str(server_or_message)+'\n')
+                                    f.write(str(second_test_result)+'\n')
                             llm_response=chat.invoke('When I run your code, I can successfully create VM, '+ \
-                                'but VNF configuration is failed. got this error message. Please fix it.\n'+str(server_or_message))['response']
+                                'but VNF configuration is failed. I got this error message. Please fix it.\n'+str(second_test_result))['response']
                 else:
+                    # VM Creation failed
                     if _ < maximum_tiral-1:
                         #print(test_result)
                         #print(f'{_+2} try')
-                        if logging:
+                        if logging_:
                             with open(logging_file, 'a') as f:
-                                f.write('Creation test failled. Results:\n')
+                                f.write('VM Creation test failled. Results:\n')
                                 f.write(str(server_or_message)+'\n')
-                        llm_response=chat.invoke('When I run your code, I got this error message. Please fix it.\n'+str(server_or_message))['response']
+                        llm_response=chat.invoke('When I run your code, I got this error message, and failed to create VM. Please fix it.\n'+str(server_or_message))['response']
             # Delete all VMs created after the target time
-            conn = openstack.connect(cloud=cloud_name)
             delete_vms_after(conn, target_datetime)
     end_time = time.time()
     print(f"Total MOPs: {all_mop_num}")
@@ -308,6 +359,7 @@ if __name__ == '__main__':
         print(f"Total VNF Config Success: {config_success_num['ko'][model]+config_success_num['en'][model]}")
         if len(process_time[model]) > 0:
             print(f"Average process time: {sum(process_time[model])/len(process_time[model])} seconds")
+        print(f"-------------------------------------------------------------")
     for vnf in success_num_by_vnf:
         print(f"VNF: {vnf}, Total MOPs: {success_num_by_vnf[vnf]['total_num']}, Success: {success_num_by_vnf[vnf]['success_num']}")
-    print(f'Total execution time:{(end_time-total_start_time)/60} minutes')
+    print(f'Total execution time:{(end_time-total_start_time)/60/60} hours')
