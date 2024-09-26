@@ -1,7 +1,6 @@
 from langchain_community.llms import Ollama
 from langchain.chains import ConversationChain
 from langchain.memory import ConversationBufferMemory
-from openai import OpenAI
 from secret import OPENAI_API_KEY, JUMP_HOST_IP, JUMP_HOST_PWD
 from langchain.chat_models import ChatOpenAI
 
@@ -18,7 +17,7 @@ import sys
 import paramiko
 import logging
 import time
-import concurrent.futures
+import multiprocessing
 
 from python_code_modify import wrap_code_in_main
 
@@ -26,49 +25,29 @@ from python_code_modify import wrap_code_in_main
 config_file_path = 'OpenStack_Conf/'
 logging.getLogger("paramiko").setLevel(logging.CRITICAL) 
 
-def run_with_timeout_creation(func, timeout):
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        future = executor.submit(func)   
+def capture_stdout(func, args=()):
+    # Do not show results of LLM's code in CLI.
+    stdout_capture = io.StringIO()
+    sys.stdout = stdout_capture
+    try:
+        result = func(*args) 
+    finally:
+        sys.stdout = sys.__stdout__
+    stdout_contents = stdout_capture.getvalue()
+    return stdout_contents, result
+
+def run_with_timeout(func, args=(), timeout = 5):
+    # Run the function with a timeout
+    with multiprocessing.Pool(processes=1) as pool:
+        result = pool.apply_async(capture_stdout, args=(func,args,))
         try:
-            output_capture = io.StringIO()
-            sys.stdout = output_capture
-            result = future.result(timeout=timeout*60) # Set timeout as minutes     
-            sys.stdout = sys.__stdout__
-            captured_output = output_capture.getvalue()
-            output_capture.close()
-            return True, result
-        except concurrent.futures.TimeoutError:
-            sys.stdout = sys.__stdout__
-            captured_output = output_capture.getvalue()
-            output_capture.close()
-            return False, f"Timeout Error: 'create_vm' function did not complete within {timeout} munites."
-        except Exception as e:
-            sys.stdout = sys.__stdout__
-            captured_output = output_capture.getvalue()
-            output_capture.close()
-            return False, f"{captured_output}, Error: {e}"
-        
-def run_with_timeout_configuration(func, server, timeout):
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        future = executor.submit(func, server)   
-        try:
-            output_capture = io.StringIO()
-            sys.stdout = output_capture
-            result = future.result(timeout=timeout*60) # Set timeout as minutes     
-            sys.stdout = sys.__stdout__
-            captured_output = output_capture.getvalue()
-            output_capture.close()
-            return True
-        except concurrent.futures.TimeoutError:
-            sys.stdout = sys.__stdout__
-            captured_output = output_capture.getvalue()
-            output_capture.close()
-            return f"Timeout Error: 'config_vm' function did not complete within {timeout} munites."
-        except Exception as e:
-            sys.stdout = sys.__stdout__
-            captured_output = output_capture.getvalue()
-            output_capture.close()
-            return f"{captured_output}, Error: {e}"
+            stdout, return_value = result.get(timeout=timeout*60) # Timeout in minutes
+            return True, return_value
+        except multiprocessing.TimeoutError:
+            if 'stdout' in locals():
+                return False, stdout+f"Timeout reached. Function did not finish within {timeout} minutes."
+            return False, f"Timeout reached. Function did not finish within {timeout} minutes."
+
         
 def test_creation(llm_response, vnf, model, vm_num):
     code_pattern = r'```python(.*?)```'
@@ -92,7 +71,7 @@ def test_creation(llm_response, vnf, model, vm_num):
     try:
         create_vm = __import__(config_file_path[:-1] + '.' + file_name[:-3],fromlist=['create_vm'])
         try:
-            result, server = run_with_timeout_creation(create_vm.create_vm, 3)
+            result, server = run_with_timeout(create_vm.create_vm, timeout = 4)
         except Exception as e:
             return False, e
         if result:
@@ -168,11 +147,11 @@ def test_configuration(server, vnf, model, vm_num):
     try:
         config_vm = __import__(config_file_path[:-1] + '.' + file_name[:-3],fromlist=['config_vm'])
         try:
-            result = run_with_timeout_configuration(config_vm.config_vm, server, 8)
+            time_out_result, result = run_with_timeout(config_vm.config_vm, (server,), 7)
         except Exception as e:
             jump_host_ssh.close()
             return e
-        if result == True:
+        if time_out_result and result == True:
             vm_ssh = paramiko.SSHClient()
             vm_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             jump_host_transport = jump_host_ssh.get_transport()
@@ -223,7 +202,7 @@ def test_configuration(server, vnf, model, vm_num):
     except Exception as e:
         #print(e)
         #print('VM creation failed')
-        if result:
+        if 'result' in locals():
             vm_ssh.close()
         jump_host_ssh.close()
         return e
@@ -294,8 +273,11 @@ if __name__ == '__main__':
     "Here is the MOP: \n" 
     
     logging_file = 'log.txt'
+    logging_file_for_vnf = 'log_vnf.txt'
+    with open(logging_file, 'w') as f:
+        f.write('')
     model_list= ["gpt-3.5-turbo", "gpt-4o", "llama2", "llama3", "llama3.1:70b", "qwen2", "qwen2:72b", "gemma2", "gemma2:27b"]
-    #model_list= ["gpt-3.5-turbo", "llama3"]
+    #model_list= ["gpt-4o", "llama3"]
     all_mop_num = len(mop_list)
     first_create_success_num = {}
     first_config_success_num = {}
@@ -315,6 +297,7 @@ if __name__ == '__main__':
     total_start_time = time.time() 
     target_datetime = datetime.now(pytz.utc)
     for mop_file in tqdm(mop_list):
+        mop_suc_num=0
         vnf = mop_file.split('_')[1]
         lang = mop_file.split('_')[3]
         if vnf not in vm_num:
@@ -386,6 +369,7 @@ if __name__ == '__main__':
                             with open(logging_file, 'a') as f:
                                 f.write('Test succeed\n')
                         print(f'VM creation and configuration both Succeed! model: {model}, vnf: {vnf}')
+                        mop_suc_num+=1
                         break
                     else:
                         # VM Config test failed.
@@ -416,6 +400,8 @@ if __name__ == '__main__':
             print(f"First VNF Config success: {first_config_success_num[model]}")
             print(f"Total VNF Config Success: {config_success_num['ko'][model]+config_success_num['en'][model]}")
             print(f"-------------------------------------------------------------")
+        with open(logging_file_for_vnf, 'a')as f:
+            f.write(f" --- MOP: {mop_file}, success num: {mop_suc_num}\n")
     
     end_time = time.time()
     print('Total report')
