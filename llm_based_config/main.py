@@ -264,7 +264,7 @@ if __name__ == '__main__':
     image_name = 'u20.04_x64'
     network_name = "'NI-data' and 'NI-management'"
     cloud_name = 'postech_cloud'
-    maximum_tiral = 1 # Two more chance.
+    maximum_tiral = 3 # Two more chance.
     conn = openstack.connect(cloud=cloud_name)
     
     good_example = read_good_example()
@@ -353,9 +353,17 @@ if __name__ == '__main__':
                         f.write(f" --- Trial: {_+1}\n")
                         f.write(llm_response+'\n\n')
                 test_result, server_or_message = test_creation(llm_response, vnf, model, vm_num[vnf])
-                sys.stdout = sys.__stdout__
                 if test_result == True:
-                    server = conn.compute.wait_for_server(server_or_message)
+                    try:
+                        server = conn.compute.wait_for_server(server_or_message)
+                    except:
+                        error_message="The 'create_vm' function does not return 'server' object. "
+                        if logging_:
+                            with open(logging_file, 'a') as f:
+                                f.write(error_message+'\n')
+                        if _ < maximum_tiral-1:
+                            llm_response=chat.invoke(error_message+'Please fix it.\n')['response']
+                        continue
                     # VM creation success.
                     # Now, test the configuration
                     if not already_success:
@@ -390,13 +398,13 @@ if __name__ == '__main__':
                                 'but VNF configuration is failed. I got this error message. Please fix it.\n'+str(second_test_result))['response']
                 else:
                     # VM Creation failed
+                    if logging_:
+                        with open(logging_file, 'a') as f:
+                            f.write('VM Creation test failled. Results:\n')
+                            f.write(str(server_or_message)+'\n')
                     if _ < maximum_tiral-1:
                         #print(test_result)
                         #print(f'{_+2} try')
-                        if logging_:
-                            with open(logging_file, 'a') as f:
-                                f.write('VM Creation test failled. Results:\n')
-                                f.write(str(server_or_message)+'\n')
                         llm_response=chat.invoke('When I run your code, I got this error message, and failed to create VM. Please fix it.\n'+str(server_or_message))['response']
             # Delete all VMs created after the target time
             delete_vms_after(conn, target_datetime)
