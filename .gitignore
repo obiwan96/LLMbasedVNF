@@ -3,9 +3,10 @@ llm_based_config/OpenStack_Conf
 */secret.py
 */log.txt
 */test.py
+test*
 Example_Code/
 Good_Example/
-Bad Example/
+Bad_Example/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

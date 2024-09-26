@@ -18,9 +18,58 @@ import sys
 import paramiko
 import logging
 import time
+import concurrent.futures
+
+from python_code_modify import wrap_code_in_main
+
 
 config_file_path = 'OpenStack_Conf/'
 logging.getLogger("paramiko").setLevel(logging.CRITICAL) 
+
+def run_with_timeout_creation(func, timeout):
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(func)   
+        try:
+            output_capture = io.StringIO()
+            sys.stdout = output_capture
+            result = future.result(timeout=timeout*60) # Set timeout as minutes     
+            sys.stdout = sys.__stdout__
+            captured_output = output_capture.getvalue()
+            output_capture.close()
+            return True, result
+        except concurrent.futures.TimeoutError:
+            sys.stdout = sys.__stdout__
+            captured_output = output_capture.getvalue()
+            output_capture.close()
+            return False, f"Timeout Error: 'create_vm' function did not complete within {timeout} munites."
+        except Exception as e:
+            sys.stdout = sys.__stdout__
+            captured_output = output_capture.getvalue()
+            output_capture.close()
+            return False, f"{captured_output}, Error: {e}"
+        
+def run_with_timeout_configuration(func, server, timeout):
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(func, server)   
+        try:
+            output_capture = io.StringIO()
+            sys.stdout = output_capture
+            result = future.result(timeout=timeout*60) # Set timeout as minutes     
+            sys.stdout = sys.__stdout__
+            captured_output = output_capture.getvalue()
+            output_capture.close()
+            return True
+        except concurrent.futures.TimeoutError:
+            sys.stdout = sys.__stdout__
+            captured_output = output_capture.getvalue()
+            output_capture.close()
+            return f"Timeout Error: 'config_vm' function did not complete within {timeout} munites."
+        except Exception as e:
+            sys.stdout = sys.__stdout__
+            captured_output = output_capture.getvalue()
+            output_capture.close()
+            return f"{captured_output}, Error: {e}"
+        
 def test_creation(llm_response, vnf, model, vm_num):
     code_pattern = r'```python(.*?)```'
     code_pattern_second = r'```(.*?)```'
@@ -36,19 +85,17 @@ def test_creation(llm_response, vnf, model, vm_num):
     file_name = f'config_{vnf}_{model.replace(".","")}_{vm_num}.py'
     with open(config_file_path + file_name, 'w') as f:
         f.write(python_code[0])
+    result = wrap_code_in_main(config_file_path + file_name, config_file_path + file_name)
+    if not result:
+        return False, 'Code parsing failed. Maybe some syntax error or unexpected indentation occured.'
     #print(file_name)
     try:
         create_vm = __import__(config_file_path[:-1] + '.' + file_name[:-3],fromlist=['create_vm'])
         try:
-            output_capture = io.StringIO()
-            sys.stdout = output_capture
-            server = create_vm.create_vm()
-            sys.stdout = sys.__stdout__
-            captured_output = output_capture.getvalue()
-            output_capture.close()
+            result, server = run_with_timeout_creation(create_vm.create_vm, 3)
         except Exception as e:
             return False, e
-        if server:
+        if result:
             #print(f"VM created successfully with name: {server.name}")
             '''try:
                 conn = openstack.connect(cloud=cloud_name)
@@ -56,13 +103,12 @@ def test_creation(llm_response, vnf, model, vm_num):
             except:
                 pass'''
             return True, server
+        else:
+            return False, server
     except Exception as e:
         #print(e)
         #print('VM creation failed')
         return False, e
-    if captured_output:
-        return False, captured_output
-    return False, 'Some reason, VM creation failed.'
 
 def vm_ssh_config_check(vm_ssh, input, output, exactly=False):
     stdin, stdout, stderr = vm_ssh.exec_command(input)
@@ -105,7 +151,7 @@ def wait_for_destination_ssh(ssh, destination_host, ssh_username, ssh_password):
             return False
 
 
-def test_configration(server, vnf, model, vm_num):
+def test_configuration(server, vnf, model, vm_num):
     jump_host_ssh = paramiko.SSHClient()
     jump_host_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     jump_host_ssh.connect(JUMP_HOST_IP, username='ubuntu', password=JUMP_HOST_PWD)
@@ -114,6 +160,7 @@ def test_configration(server, vnf, model, vm_num):
     except:
         jump_host_ssh.close()
         return "VM is created, but didn't connect to 'NI-management' network."
+    # Wait until VM is avialable to SSH connection.
     if not wait_for_destination_ssh(jump_host_ssh,vm_ip, 'ubuntu', 'ubuntu'):
         jump_host_ssh.close()
         return 'Error: Can not SSH to VM with jump host.'
@@ -121,16 +168,11 @@ def test_configration(server, vnf, model, vm_num):
     try:
         config_vm = __import__(config_file_path[:-1] + '.' + file_name[:-3],fromlist=['config_vm'])
         try:
-            output_capture = io.StringIO()
-            sys.stdout = output_capture
-            result = config_vm.config_vm(server)
-            sys.stdout = sys.__stdout__
-            captured_output = output_capture.getvalue()
-            output_capture.close()
+            result = run_with_timeout_configuration(config_vm.config_vm, server, 8)
         except Exception as e:
             jump_host_ssh.close()
             return e
-        if result:
+        if result == True:
             vm_ssh = paramiko.SSHClient()
             vm_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             jump_host_transport = jump_host_ssh.get_transport()
@@ -174,7 +216,10 @@ def test_configration(server, vnf, model, vm_num):
             vm_ssh.close()
             jump_host_ssh.close()
             # Close SSH connections
-            return 'Your code is run, but VNF is not installed correctly.'
+            return 'Your code is run well, but when I check the VM, VNF is not installed correctly as intended.'
+        else:
+            jump_host_ssh.close()
+            return result
     except Exception as e:
         #print(e)
         #print('VM creation failed')
@@ -182,12 +227,8 @@ def test_configration(server, vnf, model, vm_num):
             vm_ssh.close()
         jump_host_ssh.close()
         return e
-    jump_host_ssh.close()
-    if captured_output:
-        return captured_output
-    return 'Some reason, VM creation failed.'
 
-def delete_vms_after(conn, target_time):
+def delete_vms_after(conn, target_time, logging_=False):
     servers = conn.compute.servers(details=True)
     #print(f'target time: {target_time}')
     deleted_count = 0
@@ -195,12 +236,21 @@ def delete_vms_after(conn, target_time):
         created_at = server.created_at
         created_datetime = datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.UTC)
         if created_datetime > target_time:
-            #print(f"Deleting VM {server.name} (Created at: {created_at})")
+            if logging_:
+                print(f"Deleting VM {server.name} (Created at: {created_at})")
             conn.compute.delete_server(server.id)
             deleted_count += 1
         #else:
         #    print(f"VM (Created at: {created_at}), name : {server.name} is not deleted")
-    #print (f"Deleted {deleted_count} VMs")
+    if logging_:
+        print (f"Deleted {deleted_count} VMs")
+
+def read_good_example(example_path = 'Good_Example/'):
+    good_example = {}
+    for file in os.listdir(example_path):
+        with open(example_path+file, 'r') as f:
+            good_example[file] = f.read()
+    return good_example
 
 if __name__ == '__main__':
     #print(llm.invoke("Tell me a joke"))
@@ -214,13 +264,16 @@ if __name__ == '__main__':
     image_name = 'u20.04_x64'
     network_name = "'NI-data' and 'NI-management'"
     cloud_name = 'postech_cloud'
-    maximum_tiral = 3 # Two more chance.
+    maximum_tiral = 1 # Two more chance.
     conn = openstack.connect(cloud=cloud_name)
     
+    good_example = read_good_example()
+    good_example_str=''
+    for example in good_example:
+        good_example_str += example+'\n'+good_example[example]
     prompts = 'You are an OpenStack cloud expert. ' +  \
-    'Here is example code to create a VM in OpenStack using python with openstacksdk. '+ \
-    "import openstack\nconn = openstack.connect(cloud='openstack_cloud')\n"+ \
-    "conn.create_server('test-vm', image = 'ubuntu18.04_image', flavor = 'm1.small', network = ['net1', 'net-mgmt'])\n"+ \
+    'Here is example code to create and configurate a VM in OpenStack using python with openstacksdk. \n'+ \
+    good_example_str + \
     f"OpenStack server and authentication details are in config file. Cloud name is '{cloud_name}'.\n" + \
     "I'll give you a Method Of Procedure (MOP),"+ \
     'which describes the process of installing a VM in OpenStack and installing and configure the VNF on the VM. '+ \
@@ -234,13 +287,15 @@ if __name__ == '__main__':
     "Don't make key pair in OpenStack, don't use stdin to get any kind of password. \n"
     "If you need access to the inside of the VM for internal VM settings, instead of setting floating IP on the created VM, "+ \
     "use the Jump Host, which can connect to the internal VM, " +\
-    " to connect to the newly created VM with SSH. Here is the Jump Host information. \n" + \
+    " to connect to the newly created VM with SSH. Here is the Jump Host information." + \
+    "You will need to enable SSH connection through password to enable connection to the target VM," + \
+    " and you will need to set ID and password to 'ubuntu'.\n"
     f"Jump Host IP: {JUMP_HOST_IP}, Username: ubuntu, Password: {JUMP_HOST_PWD}\n" + \
     "Here is the MOP: \n" 
     
     logging_file = 'log.txt'
     model_list= ["gpt-3.5-turbo", "gpt-4o", "llama2", "llama3", "llama3.1:70b", "qwen2", "qwen2:72b", "gemma2", "gemma2:27b"]
-    #model_list= ["gpt-3.5-turbo", "gpt-4o", "llama3"]
+    #model_list= ["gpt-3.5-turbo", "llama3"]
     all_mop_num = len(mop_list)
     first_create_success_num = {}
     first_config_success_num = {}
@@ -311,7 +366,7 @@ if __name__ == '__main__':
                     if _ == 0:
                         first_create_success_num[model] += 1
                     
-                    second_test_result = test_configration(server_or_message, vnf, model, vm_num[vnf])
+                    second_test_result = test_configuration(server_or_message, vnf, model, vm_num[vnf])
                     conn.delete_server(server_or_message.id)
                     if second_test_result == True:
                         process_time[model].append(time.time()-start_time)
@@ -326,11 +381,11 @@ if __name__ == '__main__':
                         break
                     else:
                         # VM Config test failed.
+                        if logging_:
+                            with open(logging_file, 'a') as f:
+                                f.write('Config test failled. Results:\n')
+                                f.write(str(second_test_result)+'\n')
                         if _ < maximum_tiral-1:
-                            if logging_:
-                                with open(logging_file, 'a') as f:
-                                    f.write('Config test failled. Results:\n')
-                                    f.write(str(second_test_result)+'\n')
                             llm_response=chat.invoke('When I run your code, I can successfully create VM, '+ \
                                 'but VNF configuration is failed. I got this error message. Please fix it.\n'+str(second_test_result))['response']
                 else:
@@ -345,7 +400,17 @@ if __name__ == '__main__':
                         llm_response=chat.invoke('When I run your code, I got this error message, and failed to create VM. Please fix it.\n'+str(server_or_message))['response']
             # Delete all VMs created after the target time
             delete_vms_after(conn, target_datetime)
+        print('Middle report')
+        for model in model_list:
+            print(f"Model: {model},")
+            print(f"First VM Create success: {first_create_success_num[model]}")
+            print(f"Total VM Create Success: {create_success_num['ko'][model]+create_success_num['en'][model]}")
+            print(f"First VNF Config success: {first_config_success_num[model]}")
+            print(f"Total VNF Config Success: {config_success_num['ko'][model]+config_success_num['en'][model]}")
+            print(f"-------------------------------------------------------------")
+    
     end_time = time.time()
+    print('Total report')
     print(f"Total MOPs: {all_mop_num}")
     for model in model_list:
         print(f"Model: {model},")
