@@ -20,10 +20,14 @@ import time
 import multiprocessing
 
 from python_code_modify import wrap_code_in_main
-
+from make_new_floating_ip import make_new_floating_ip
 
 config_file_path = 'OpenStack_Conf/'
 logging.getLogger("paramiko").setLevel(logging.CRITICAL) 
+
+# Just now, preventing the infinite loop by remove top-tier code.
+# I really try hard to run with time-out, but all fails. Hold on now.
+preventing_loop = False
 
 def capture_stdout(func, args=()):
     # Do not show results of LLM's code in CLI.
@@ -34,6 +38,7 @@ def capture_stdout(func, args=()):
     finally:
         sys.stdout = sys.__stdout__
     stdout_contents = stdout_capture.getvalue()
+    stdout_capture.close()
     return stdout_contents, result
 
 def run_with_timeout(func, args=(), timeout = 5):
@@ -71,7 +76,24 @@ def test_creation(llm_response, vnf, model, vm_num):
     try:
         create_vm = __import__(config_file_path[:-1] + '.' + file_name[:-3],fromlist=['create_vm'])
         try:
-            result, server = run_with_timeout(create_vm.create_vm, timeout = 4)
+            if preventing_loop:
+                result, server = run_with_timeout(create_vm.create_vm, timeout = 4)
+            else:
+                try:
+                    stdout_capture = io.StringIO()
+                    sys.stdout = stdout_capture
+                    server = create_vm.create_vm()
+                    if server == None:
+                        return False, "The 'create_vm' function does not return 'server' object."
+                    return True, server
+                except Exception as e:
+                    sys.stdout = sys.__stdout__
+                    stdout_contents = stdout_capture.getvalue()
+                    stdout_capture.close()        
+                    if stdout_contents:      
+                        return False, stdout_contents+e
+                    else:
+                        return False, e
         except Exception as e:
             return False, e
         if result:
@@ -130,10 +152,18 @@ def wait_for_destination_ssh(ssh, destination_host, ssh_username, ssh_password):
             return False
 
 
-def test_configuration(server, vnf, model, vm_num):
+def test_configuration(server, vnf, model, vm_num, conn, floating_server):
     jump_host_ssh = paramiko.SSHClient()
     jump_host_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    jump_host_ssh.connect(JUMP_HOST_IP, username='ubuntu', password=JUMP_HOST_PWD)
+    try:
+        jump_host_ssh.connect(JUMP_HOST_IP, username='ubuntu', password=JUMP_HOST_PWD)
+    except:
+        # Jump host VM got crashed. build again.
+        conn.compute.delete_server(floating_server.id)
+        floating_server = make_new_floating_ip(conn)
+        if not floating_server:
+            print('Make flaoting IP failed')
+            exit()
     try:
         vm_ip = server.addresses['NI-management'][0]['addr']
     except:
@@ -147,7 +177,24 @@ def test_configuration(server, vnf, model, vm_num):
     try:
         config_vm = __import__(config_file_path[:-1] + '.' + file_name[:-3],fromlist=['config_vm'])
         try:
-            time_out_result, result = run_with_timeout(config_vm.config_vm, (server,), 7)
+            if preventing_loop:
+                time_out_result, result = run_with_timeout(config_vm.config_vm, (server,), 7)
+            else:
+                try:
+                    stdout_capture = io.StringIO()
+                    sys.stdout = stdout_capture
+                    result = config_vm.config_vm(server)
+                    if result == None:
+                        return 'config_vm function does not return anything. It should return the whether the configuration is successful or not.'
+                    time_out_result = True                  
+                except Exception as e:
+                    sys.stdout = sys.__stdout__
+                    stdout_contents = stdout_capture.getvalue()
+                    stdout_capture.close()        
+                    if stdout_contents:      
+                        return stdout_contents+e
+                    else:
+                        return e
         except Exception as e:
             jump_host_ssh.close()
             return e
@@ -216,13 +263,15 @@ def delete_vms_after(conn, target_time, logging_=False):
         created_datetime = datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=pytz.UTC)
         if created_datetime > target_time:
             if logging_:
-                print(f"Deleting VM {server.name} (Created at: {created_at})")
+                pass
+                #print(f"Deleting VM {server.name} (Created at: {created_at})")
             conn.compute.delete_server(server.id)
             deleted_count += 1
         #else:
         #    print(f"VM (Created at: {created_at}), name : {server.name} is not deleted")
     if logging_:
-        print (f"Deleted {deleted_count} VMs")
+        pass
+        #print (f"Deleted {deleted_count} VMs")
 
 def read_good_example(example_path = 'Good_Example/'):
     good_example = {}
@@ -274,10 +323,10 @@ if __name__ == '__main__':
     
     logging_file = 'log.txt'
     logging_file_for_vnf = 'log_vnf.txt'
-    with open(logging_file, 'w') as f:
+    with open(logging_file_for_vnf, 'w') as f:
         f.write('')
     model_list= ["gpt-3.5-turbo", "gpt-4o", "llama2", "llama3", "llama3.1:70b", "qwen2", "qwen2:72b", "gemma2", "gemma2:27b"]
-    #model_list= ["gpt-4o", "llama3"]
+    model_list= ["gpt-4o"]
     all_mop_num = len(mop_list)
     first_create_success_num = {}
     first_config_success_num = {}
@@ -285,7 +334,7 @@ if __name__ == '__main__':
     config_success_num = {'ko':{}, 'en':{}}
     success_num_by_vnf={}
     process_time = {}
-    for model in model_list:
+    for model in model_list[:2]:
         first_create_success_num[model] = 0
         first_config_success_num[model] = 0
         create_success_num['ko'][model] = 0
@@ -296,6 +345,10 @@ if __name__ == '__main__':
     vm_num = {}
     total_start_time = time.time() 
     target_datetime = datetime.now(pytz.utc)
+    floating_server = make_new_floating_ip(conn)
+    if not floating_server:
+        print('Make flaoting IP failed')
+        exit()
     for mop_file in tqdm(mop_list):
         mop_suc_num=0
         vnf = mop_file.split('_')[1]
@@ -357,7 +410,7 @@ if __name__ == '__main__':
                     if _ == 0:
                         first_create_success_num[model] += 1
                     
-                    second_test_result = test_configuration(server_or_message, vnf, model, vm_num[vnf])
+                    second_test_result = test_configuration(server_or_message, vnf, model, vm_num[vnf], conn, floating_server)
                     conn.delete_server(server_or_message.id)
                     if second_test_result == True:
                         process_time[model].append(time.time()-start_time)
@@ -404,6 +457,7 @@ if __name__ == '__main__':
             f.write(f" --- MOP: {mop_file}, success num: {mop_suc_num}\n")
     
     end_time = time.time()
+    conn.compute.delete_server(floating_server.id)
     print('Total report')
     print(f"Total MOPs: {all_mop_num}")
     for model in model_list:

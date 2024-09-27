@@ -2,6 +2,7 @@ llm_based_config/clouds.yaml
 llm_based_config/OpenStack_Conf
 */secret.py
 */log.txt
+log_vnf.txt
 */test.py
 test*
 Example_Code/
