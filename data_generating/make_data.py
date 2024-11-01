@@ -66,7 +66,7 @@ def make_mop():
         for para in doc.paragraphs:
             example_mop+=para.text+'\n'
     total_num_file=0
-    for lang in ['en']:
+    for lang in ['en', 'ko']:
         for system_container in system_container_list:
             system, container = system_container
             for function in function_list:
@@ -74,9 +74,8 @@ def make_mop():
                 for additional_command in additional_command_list[function]:
                     for prompt in prompts['mop']:
                         formatted_prompt = example_mop+prompt.format(system=system, container=container, 
-                            function=function, additional_command=additional_command[1])
+                            function=function, additional_command=additional_command)
                         if function=='firewall':
-                            continue
                             formatted_prompt+=' Use iptables operation, not ufw.'
                         if lang=='ko':
                             formatted_prompt+='Please write in Korean'
