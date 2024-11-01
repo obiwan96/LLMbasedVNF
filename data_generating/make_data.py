@@ -66,7 +66,7 @@ def make_mop():
         for para in doc.paragraphs:
             example_mop+=para.text+'\n'
     total_num_file=0
-    for lang in ['en', 'ko']:
+    for lang in ['en']:
         for system_container in system_container_list:
             system, container = system_container
             for function in function_list:
@@ -74,16 +74,20 @@ def make_mop():
                 for additional_command in additional_command_list[function]:
                     for prompt in prompts['mop']:
                         formatted_prompt = example_mop+prompt.format(system=system, container=container, 
-                            function=function, additional_command=additional_command)
+                            function=function, additional_command=additional_command[1])
                         if function=='firewall':
-                            formatted_prompt+=' Use iptables operation.'
+                            continue
+                            formatted_prompt+=' Use iptables operation, not ufw.'
                         if lang=='ko':
                             formatted_prompt+='Please write in Korean'
+                        else:
+                            formatted_prompt+='Please write in English'
                         if system=='OpenStack':
                             formatted_prompt+='Also, do not use the GUI(Horizon), use the CLI. '+ \
                                 'Instead of setting floating IP on the created VM, use the Jump Host, '+ \
                                 'which can connect to the internal VM, to connect to the newly created VM with SSH '+ \
-                                'and operate the shell commands in SSH connection.'
+                                'and operate the shell commands in SSH connection. To do this, enable SSH access through the password. \n' + \
+                                "Don't make security groups or keypairs."
                         response = openai_client.chat.completions.create(
                             model = 'gpt-4o-mini', messages=[
                                 {"role" : "system", "content" : f'You are an expert in {system} management.'},
@@ -92,7 +96,7 @@ def make_mop():
                         content=response.choices[0].message.content
                         #print(content)
                         #print('-------------------')
-                        mop_file_path = data_path+f"{system}_{function}_setup_{lang}_withExample_{last_num}.docx"
+                        mop_file_path = data_path+f"{system}_{function}_setup_{additional_command[0]}_{lang}_withExample_{last_num}.docx"
                         last_num+=1
                         doc = Document()
                         for line in content.split('\n'):

@@ -5,6 +5,8 @@ llm_based_config/OpenStack_Conf
 log_vnf.txt
 */test.py
 test*
+already_done.py
+mop/
 Example_Code/
 Good_Example/
 Bad_Example/

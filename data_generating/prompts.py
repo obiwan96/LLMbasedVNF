@@ -30,20 +30,20 @@ system_container_list= [['OpenStack', 'VM']]
 function_list = ['firewall', 'Haproxy', 'nDPI', 'ntopng', 'Suricata']
 
 additional_command_list = {'firewall': 
-                           ['configures it to allow only IPs in the specific subnet to pass through ussing firewall', 
-                            #'configures it to block all traffic except for the specific subnet ussing firewall', 
+                           [['subnet','configures it to allow only IPs in the specific subnet to pass through ussing firewall'], 
+                            ['subnet','configures it to block all traffic except for the specific subnet ussing firewall'], 
                             #'configures it to allow only specific ports to pass through ussing firewall', 
-                            'configures it to block all traffic except for specific ports ussing firewall'],
+                            ['port','configures it to block all traffic except for the specific port ussing firewall']],
                            'Haproxy':
-                           ['Haproxy can be installed with apt. Configures it to load balance between the specific servers',
-                            'Haproxy can be installed with apt. Configures it to redirect traffic to the specific server'],
+                           [['loadbalance','Haproxy can be installed with apt. Configures it to load balance between the specific servers'],
+                            ['redirect','Haproxy can be installed with apt. Configures it to redirect traffic to the specific server']],
                             #'Haproxy can be installed with apt. Configures it to cache the specific content',
                             #'Haproxy can be installed with apt. Configures it to allow only specific ports to pass through'],
                            'nDPI':
-                           ['nDPI can be installed with git. Configures it inspect the packtes of a specific subnet using nDPI',
-                            'nDPI can be installed with git. Configures it to block the specific traffic using nDPI, not ufw.'],
+                           [['inspect','nDPI can be installed with git. Configures it inspect the packtes of a specific subnet using nDPI'],
+                            ['block','nDPI can be installed with git. Configures it to block the specific traffic using nDPI, not ufw.']],
                            'ntopng':
-                           ['ntopng can be installed with apt. Configures it to report the usage by protocol using ntopng'],
+                           [['report','ntopng can be installed with apt. Configures it to report the usage by protocol using ntopng']],
                            'Suricata':
-                           ['Suricata can be installed with apt. Please set the most basic rules and set them to work']
+                           [['basic','Suricata can be installed with apt. Please set the most basic rules and set them to work']]
 }
