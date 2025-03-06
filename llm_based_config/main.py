@@ -4,6 +4,7 @@ from langchain.memory import ConversationBufferMemory
 from secret import OPENAI_API_KEY, JUMP_HOST_IP, JUMP_HOST_PWD
 from already_done import already_done
 from langchain.chat_models import ChatOpenAI
+import argparse
 
 from docx import Document
 import os
@@ -298,16 +299,27 @@ def delete_vms_after(conn, target_time, logging_=False):
         pass
         #print (f"Deleted {deleted_count} VMs")
 
-def read_good_example(example_path = 'Good_Example/'):
+def read_good_example(method, platform, example_path = 'Good_Example/'):
     good_example = {}
     for file in os.listdir(example_path):
-        with open(example_path+file, 'r') as f:
-            good_example[file] = f.read()
+        if platform in file and file.endswith(method):
+            with open(example_path+file, 'r') as f:
+                good_example[file] = f.read()
     return good_example
 
 if __name__ == '__main__':
+    argparser = argparse.ArgumentParser()
+    argparser.add_argument('--OpenStack', action='store_true')
+    argparser.add_argument('--K8S', action='store_true')
+    argparser.add_argument('--Ansible', action='store_true')
+    argparser.add_argument('--Python', action='store_true')
+    argparser.add_argument('--gpt', action='store_true')
+    aprgparser.add_argument('--llama', action='store_true')
     #print(llm.invoke("Tell me a joke"))
-    mop_file_path = '../mop/OpenStack_v3/'
+    if argparser.OpenStack:
+        mop_file_path = '../mop/OpenStack_v3/'
+    elif argparser.K8S:
+        mop_file_path = '../mop/K8S/'
     mop_list = os.listdir(mop_file_path)
     os.environ['OPENAI_API_KEY'] = OPENAI_API_KEY
     logging_ = True
@@ -318,43 +330,118 @@ if __name__ == '__main__':
     network_name = "'NI-data' and 'NI-management'"
     cloud_name = 'postech_cloud'
     maximum_tiral = 3 # Two more chance.
-    conn = openstack.connect(cloud=cloud_name)
+    if argparser.OpenStack:
+        conn = openstack.connect(cloud=cloud_name)
     
-    good_example = read_good_example()
+    if argparser.Python:
+        if argparser.OpenStack:
+            good_example= read_good_example('py', 'OpenStack')
+        elif argparser.K8S:
+            good_example= read_good_example('py', 'k8s')
+        else:
+            good_example = read_good_example('py')
+    elif argparser.Ansible:
+        if argparser.OpenStack:
+            good_example= read_good_example('yml', 'OpenStack')
+        elif argparser.K8S:
+            good_example= read_good_example('yml', 'k8s')
+        else:
+            good_example = read_good_example('yml')
+    else:
+        print('Currently, only supporting Python and Ansible. Specify which one you use.')
+        sys.exit(0)
     good_example_str=''
     for example in good_example:
         good_example_str += example+':\n'+good_example[example] +'\n'
-    prompts_1 = '''You are an OpenStack cloud expert. 
-    Here are 'example' codes to create and configurate a VNF in OpenStack using python with openstacksdk. \n'''+ \
-    good_example_str + \
-    f'''\nPlease rememeber, these are example code, so you have to just refer to them. For detailed VNF setup methods and parameters, follow the following description, not the example code.
-    OpenStack server and authentication details are in config file. Cloud name is '{cloud_name}'.
-    I'll give you a Method Of Procedure (MOP),"
-    which describes the process of installing a VM in OpenStack and installing and configure the VNF on the VM. 
-    With reference to this, please write the Python code that automates the process in MOP. 
-    Put the code to create VM in the function name 'create_vm' and return the 'server object' if the VM is created successfully, 
-    and return False if it fails. And make the part in charge of VNF configuration as a function of 'cofig_vm'.
-    'config_vm' takes the 'server object' as a input and returns True if the configuration is successful, and False if it fails. 
-    In this way, I hope that the same process as MOP will be performed by continuously executing the 'create_vm' function and 'config_vm'.'''
-    
-    prompts_2= f'''Don't seperate two fucntions, put in same code block, and don't put usage or example in the block.
-    Use '{image_name}' image, '{flavor_name}' flavor, {network_name} network.
-    Don't make key pair in OpenStack, don't use stdin to get any kind of password.
-    If you need access to the inside of the VM for internal VM settings, instead of setting floating IP on the created VM,
-    use the Jump Host, which can connect to the internal VM, 
-    to connect to the newly created VM with SSH. Here is the Jump Host information.
-    You will need to enable SSH connection in newly created VM through password to enable connection from Jump Host,
-    and you will need to set an ID and password to 'ubuntu'. You should get an IP address in 'server' object and use it to connect in VM.
-    Jump Host IP: {JUMP_HOST_IP}, Username: ubuntu, Password: {JUMP_HOST_PWD}
-    When if you need to modify some files in VM, Paramiko is not an interactive session, so you should not use vim or nano. I recommend to use echo, but you can find other way.
-    Every time you access the VM with Paramiko, it connect to '/home' directory, so 'cd' does not work. I recommend you to use the absolute path.
-    Here is the MOP: '''
+    if argparser.Python:
+        if argparser.OpenStack:
+            prompts_1 = '''You are an OpenStack cloud expert. 
+            Here are 'example' codes to create and configurate a VNF in OpenStack using python with openstacksdk. \n'''
+            good_example_str + \
+            f'''\nPlease rememeber, these are example code, so you have to just refer to them. For detailed VNF setup methods and parameters, follow the following description, not the example code.
+            OpenStack server and authentication details are in config file. Cloud name is '{cloud_name}'.
+            I'll give you a Method Of Procedure (MOP),"
+            which describes the process of installing a VM in OpenStack and installing and configure the VNF on the VM. 
+            With reference to this, please write the Python code that automates the process in MOP. 
+            Put the code to create VM in the function name 'create_vm' and return the 'server object' if the VM is created successfully, 
+            and return False if it fails. And make the part in charge of VNF configuration as a function of 'cofig_vm'.
+            'config_vm' takes the 'server object' as a input and returns True if the configuration is successful, and False if it fails. 
+            In this way, I hope that the same process as MOP will be performed by continuously executing the 'create_vm' function and 'config_vm'.'''
+        
+            prompts_2= f'''Don't seperate two fucntions, put in same code block, and don't put usage or example in the block.
+            Use '{image_name}' image, '{flavor_name}' flavor, {network_name} network.
+            Don't make key pair in OpenStack, don't use stdin to get any kind of password.
+            If you need access to the inside of the VM for internal VM settings, instead of setting floating IP on the created VM,
+            use the Jump Host, which can connect to the internal VM, 
+            to connect to the newly created VM with SSH. Here is the Jump Host information.
+            You will need to enable SSH connection in newly created VM through password to enable connection from Jump Host,
+            and you will need to set an ID and password to 'ubuntu'. You should get an IP address in 'server' object and use it to connect in VM.
+            Jump Host IP: {JUMP_HOST_IP}, Username: ubuntu, Password: {JUMP_HOST_PWD}
+            When if you need to modify some files in VM, Paramiko is not an interactive session, so you should not use vim or nano. I recommend to use echo, but you can find other way.
+            Every time you access the VM with Paramiko, it connect to '/home' directory, so 'cd' does not work. I recommend you to use the absolute path.
+            Here is the MOP: '''
+
+        # K8S Python code part is just copy version of OpenStack. need change.
+        elif argparser.K8S:
+            prompts_1 = '''You are an Kubernetes cloud expert. 
+            Here are 'example' codes to create and configurate a CNF in Kubernetes using Python with Kubernetes library. \n'''
+            good_example_str + \
+            f'''\nPlease rememeber, these are example code, so you have to just refer to them. For detailed CNF setup methods and parameters, follow the following description, not the example code.
+            The Kubernetes configuration file path is '/home/dpnm/.kube/config'.
+            I'll give you a Method Of Procedure (MOP),"
+            which describes the process of installing a Pod in Kubernetes and installing and configure the CNF on the Pod. 
+            With reference to this, please write the Python code that automates the process in MOP. 
+            Put the code to create Pod in the function name 'create_Pod' and return the 'server object' if the Pod is created successfully, 
+            and return False if it fails. And make the part in charge of CNF configuration as a function of 'cofig_Pod'.
+            'config_Pod' takes the 'server object' as a input and returns True if the configuration is successful, and False if it fails. 
+            In this way, I hope that the same process as MOP will be performed by continuously executing the 'create_Pod' function and 'config_Pod'.'''
+        
+            prompts_2= f'''Don't seperate two fucntions, put in same code block, and don't put usage or example in the block.
+            Use '{image_name}' image, '{flavor_name}' flavor, {network_name} network.
+            Don't make key pair in Kubernetes, don't use stdin to get any kind of password.
+            If you need access to the inside of the Pod for internal Pod settings, instead of setting floating IP on the created Pod,
+            use the Jump Host, which can connect to the internal Pod, 
+            to connect to the newly created Pod with SSH. Here is the Jump Host information.
+            You will need to enable SSH connection in newly created Pod through password to enable connection from Jump Host,
+            and you will need to set an ID and password to 'ubuntu'. You should get an IP address in 'server' object and use it to connect in Pod.
+            Jump Host IP: {JUMP_HOST_IP}, Username: ubuntu, Password: {JUMP_HOST_PWD}
+            When if you need to modify some files in Pod, Paramiko is not an interactive session, so you should not use vim or nano. I recommend to use echo, but you can find other way.
+            Every time you access the Pod with Paramiko, it connect to '/home' directory, so 'cd' does not work. I recommend you to use the absolute path.
+            Here is the MOP: '''
+
+    elif argparser.Ansible:
+        if argparser.OpenStack:
+            continue
+        # Let's do K8S Ansible first!
+        elif argparser.K8S:
+            prompts_1 = '''You are an Kubernetes cloud expert. 
+            Here are 'example' configuration codes by YAML to create and configurate a CNF in Kubernetes using Ansible. \n'''
+            good_example_str + \
+            f'''\nPlease rememeber, these are YAML code, so you have to just refer to them. 
+            For detailed CNF setup methods and parameters, follow the following description, not the example YAML code.
+            The Kubernetes configuration file path is '/home/dpnm/.kube/config'.
+            I'll give you a Method Of Procedure (MOP),"
+            which describes the process of installing a Pod in Kubernetes and installing and configure the CNF on the Pod. 
+            With reference to this, please write the YAML code that automates the process in MOP. '''
+        
+            prompts_2= f'''Use '{image_name}' image, '{flavor_name}' flavor, {network_name} network.
+            Here is the MOP: '''
     
     logging_file = 'log.txt'
     logging_file_for_vnf = 'log_vnf.txt'
     with open(logging_file_for_vnf, 'w') as f:
         f.write('')
-    model_list= ["gpt-3.5-turbo", "gpt-4o", "llama3", "llama3.1:70b", "qwen2", "qwen2:72b", "gemma2", "gemma2:27b"]
+    if argparser.gpt:
+            model_list= ["gpt-3.5-turbo", "gpt-4o"]
+    elif argparser.llama:
+            model_list= ["llama3", "llama3.1:70b"]
+    else:
+        # Needs some version changes. 
+        # Need to check steel they are latest one.
+        # Need to add some codes-specific LLM.
+        # Maybe add 1 or 2 recently developed LLM.
+
+        model_list= ["gpt-3.5-turbo", "gpt-4o", "llama3", "llama3.1:70b", "qwen2", "qwen2:72b", "gemma2", "gemma2:27b"]
     num_ctx_list = {
         "llama3" : 8192,
         "llama3.1:70b" : 8192,
@@ -363,7 +450,6 @@ if __name__ == '__main__':
         "gemma2" : 8192,
         "gemma2:27b" : 8192
     }
-    #model_list= ["gpt-4o"]
     all_mop_num = len(mop_list)
     first_create_success_num = {}
     first_config_success_num = {}
@@ -463,6 +549,9 @@ if __name__ == '__main__':
                     if _ == 0:
                         first_create_success_num[model] += 1
                     start_time = time.time()
+                    # Test configuration here. Need change for K8S and Ansible.
+                    # Todo: Needs develop SFC checking module.
+
                     second_test_result = test_configuration(server_or_message, vnf, model, vm_num[vnf], conn, None)
                     spend_time[2] = time.time()-start_time
                     conn.delete_server(server_or_message.id)
@@ -480,6 +569,8 @@ if __name__ == '__main__':
                         break
                     else:
                         # VM Config test failed.
+
+                        # Todo: add RAG here.
                         if logging_:
                             with open(logging_file, 'a') as f:
                                 f.write('Config test failled. Results:\n')
