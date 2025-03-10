@@ -8,12 +8,12 @@ prompts={
     "Create an Ansible YAML script that installs a container on the 'kubeworker1' Kubernetes node with 2 GB of RAM and 2 CPUs, assigns the container the IP '192.168.2.2', and configures a firewall on the node to accept connections only from the '192.168.2.0/24' subnet."
     ],
     'mop' : ["Please write an MOP (Method of Procedure) file about that installing a {container} in"+
-             " the specific node in {system}, assigns the IP to that, installing a {function}, and {additional_command}."+
-             "Please also include how to set cpu or ram as user want.",
+             " the specific node in {system}, installing a {function}, and {additional_command}."+
+             "Please also include the system requirements for that function. Please write as detailed as possible.",
              
              "Please create an MOP (Method of Procedure) that describe everything that goes through the following process in detail."+
-             " Deploys a {container} with specific memory of RAM and specific number of CPUs on the {system}. User must can designate the speicifc node name."+
-             " Set the IP address to specific ip address, additionally, install a {function} on the node and {additional_command}."
+             " Deploys a {container} with system requirements for the {function} in {system}. "+
+             " Install a {function} on the node and {additional_command} in the {container}. Please write with maximum detail."
              
             # "Write an MOP (Method of Procedure) to deploy a {system} {container} on the specific node. "+
              #"Also, include how to assign the {container} a static IP, install a {function} on that {container} and {additional_command}. Also, include how to set the CPU and RAM as user want.",
