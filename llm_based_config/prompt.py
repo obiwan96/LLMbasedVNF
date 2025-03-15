@@ -2,6 +2,8 @@ import os
 import sys
 from secret import JUMP_HOST_IP, JUMP_HOST_PWD
 
+pod_name = 'cnf-pod'
+namespace = 'llm-config'
 def read_good_example(method, platform, example_path = 'Good_Example/'):
     good_example = {}
     for file in os.listdir(example_path):
@@ -101,13 +103,14 @@ def prompt(lang, system):
         # Let's do Kubernetes Ansible first!
         elif system== 'Kubernetes':
             prompts_1 = '''You are an Kubernetes cloud expert. I'll give you a Method Of Procedure (MOP),
-            which describes the process of installing a Pod in Kubernetes and installing and configure the CNF on the Pod. 
-            With reference next, please write the YAML code for Ansible that automates the process in MOP.
+            which describes the process of installing a Pod in Kubernetes and installing and configure the CNF specified in the MOP on the Pod. 
+            With reference next, please write the YAML code for Ansible that automates the installation and configuration process in MOP.
             Here are 'example' configuration codes by YAML to create and configurate a CNF in Kubernetes using Ansible. \n'''
             good_example_str + \
             f'''\nPlease rememeber, these are example code, so you have to just refer to them. 
             For detailed CNF setup methods and parameters, follow the description in the MOP, not the example YAML code.
-            The Kubernetes configuration file path is '/home/dpnm/.kube/config'.'''            
+            Kubernetes is already installed well, and to connect the node, you may need the Kubernetes configuration file and it's path is '/home/dpnm/.kube/config'.
+            You should use '{pod_name}' as a Pod's name, and '{namespace}' as a namespace.'''
         
             prompts_2= f'''Here is the MOP: '''
 
