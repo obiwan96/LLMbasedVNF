@@ -57,23 +57,26 @@ if __name__ == '__main__':
     logging_file_for_vnf = 'log_vnf.txt'
     with open(logging_file_for_vnf, 'w') as f:
         f.write('')
+    model_list=[]
     if argparser.gpt:
-            model_list= ["gpt-3.5-turbo", "gpt-4o"]
-    elif argparser.llama:
-            model_list= ["llama3", "llama3.1:70b"]
-    else:
-        # Needs some version changes. 
-        # Need to check steel they are latest one.
-        # Need to add some codes-specific LLM.
-        # Maybe add 1 or 2 recently developed LLM.
-        model_list= ["gpt-3.5-turbo", "gpt-4o", "llama3", "llama3.1:70b", "qwen2", "qwen2:72b", "gemma2", "gemma2:27b"]
+            model_list.extend(["gpt-o3-mini", "gpt-4o"])
+    if argparser.llama:
+            model_list.extend(["llama3.3", "codellama:70b"])
+    if not argparser.gpt and not argparser.llama:
+        model_list= ["gpt-o3-mini", "gpt-4o", "llama3.3", "codellama:70b", 
+                     "qwen2.5-coder:32b", "qwen2:72b", "deepseek-r1:70b", "gemma3:27b", "codegemma:7b"]
     num_ctx_list = {
-        "llama3" : 8192,
+        "llama3.3" : 8192,
         "llama3.1:70b" : 8192,
         "qwen2" :8192,
         "qwen2:72b" : 8192,
         "gemma2" : 8192,
-        "gemma2:27b" : 8192
+        "gemma2:27b" : 8192,
+        "gemma3:27b" : 8192,
+        "deepseek-r1:70b" : 8192,
+        "codellama:70b" : 8192,
+        "qwen2.5-coder:32b" : 8192,
+        "codegemma:7b" : 8192
     }
     all_mop_num = len(mop_list)
     first_create_success_num = {}
@@ -97,7 +100,7 @@ if __name__ == '__main__':
     #if not floating_server:
     #    print('Make flaoting IP failed')
     #    exit()
-    for mop_file in tqdm(mop_list):
+    for mop_file in tqdm(mop_list[:3]):
         if mop_file in already_done:
             continue
         mop_suc_num=0
@@ -182,18 +185,21 @@ if __name__ == '__main__':
                     #    print(f"succeed after {_+1} times trial")
                     if _ == 0:
                         first_create_success_num[model] += 1
-                        
-                    # Creation test first. Should be removed later.
-                    break
-                    # Creation test first. Should be removed later.
 
                     start_time = time.time()
+
                     # Test configuration here. Need change for K8S and Ansible.
                     # Todo: Needs develop SFC checking module.
 
-                    second_test_result = test_configuration(server_or_message, vnf, model, vm_num[vnf], conn, None)
+                    if system_name=='OpenStack':
+                        second_test_result = test_openstack_configuration(server_or_message, vnf, model, vm_num[vnf], conn, None)
+                    if system_name=='Kubernetes':
+                        second_test_result = test_K8S_configuration(server_or_message, vnf, model, vm_num[vnf], v1, namespace)
                     spend_time[2] = time.time()-start_time
-                    conn.delete_server(server_or_message.id)
+                    if system_name=='OpenStack':
+                        conn.delete_server(server_or_message.id)
+                    if system_name=='Kubernetes':
+                        delete_pod(v1, pod_name, namespace, logging_=True)
                     if second_test_result == True:
                         process_time[model].append(spend_time)
                         success_num_by_vnf[vnf]['success_num'] += 1

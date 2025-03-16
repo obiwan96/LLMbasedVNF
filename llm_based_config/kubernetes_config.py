@@ -3,7 +3,7 @@ from kubernetes import client, config, stream
 from kubernetes.client.rest import ApiException
 import yaml
 import re
-from prompt import pod_name, namespace
+from prompt import namespace
 import time
 
 def list_pods_in_namespace(v1, namespace=namespace):
@@ -44,8 +44,10 @@ def test_creation_ansible(llm_response, vnf, model, vm_num, v1, timeout=300):
     try:
         pod_name= vnf+'-pod'
         yaml_data = yaml.safe_load(yml_code[0])
-        update_yml(yaml_data, )
+        update_yml(yaml_data, pod_name)
         if not pod_name in str(yaml_data) or not namespace in str(yaml_data):
+            print(pod_name, namespace)
+            print(str(yaml_data))
             return False, "YAML parsing failed. Please add pod name and namespace in the YAML code by refering the example code."
     except:
         return False, "YAML parsing failed. Please check the format of the YAML code. Please refer to the example code again."
@@ -75,11 +77,10 @@ def test_creation_ansible(llm_response, vnf, model, vm_num, v1, timeout=300):
                         
                         if phase == "Running" and ready:
                             # Pod is creating successfully
-                            return True, pod
+                            return True, pod_name
                     if time.time() - start_time > timeout:
                         return False, f"Ansible run succeed, but the containers are not ready whitin {timeout} seconds. Test fail."
                     time.sleep(5)
-                return True, 0
             except ApiException as e:
                 if e.status == 404:
                     return False, f"Ansible run succeeed. But Pod '{pod_name}' doesn't exist in the Kubernetes namespace '{namespace}."
@@ -94,6 +95,55 @@ def test_creation_ansible(llm_response, vnf, model, vm_num, v1, timeout=300):
         #print('VM creation failed')
         return False, e
 
+def run_config(v1, pod_name, namespace, input, output, exactly=False):
+    input = input.strip()
+    try:
+        response = stream.stream(
+            v1.connect_get_namespaced_pod_exec,
+            pod_name,
+            namespace,
+            command=input,
+            stderr=True,
+            stdin=False,
+            stdout=True,
+            tty=False
+        )
+        print("명령어 실행 결과:")
+        print(response)
+    except ApiException as e:
+        return e
+    if exactly:
+        #mresponsesg = response.read().decode("utf-8").strip()
+        if response == output:
+            return True
+    else:
+        #response = response.read().decode("utf-8")
+        if output in response:
+            return True
+    return False
+
+def test_K8S_configuration(pod_name, vnf, model, vm_num, v1, namespace):
+    config_file_path = 'K8S_Conf/'
+    if vnf == 'firewall':
+        result = run_config(v1, pod_name, namespace, 'sudo iptables -L -v -n', 'DROP')
+    elif vnf == 'Haproxy':
+        result = run_config(v1, pod_name, namespace, 'systemctl is-active haproxy', 'active', exactly=True)
+        if result == True:
+            result = run_config(v1, pod_name, namespace, 'haproxy -c -f /etc/haproxy/haproxy.cfg', 'Configuration file is valid')
+    elif vnf == 'nDPI':
+        result = run_config(v1, pod_name, namespace, 'ps aux', 'ndpiReader')
+    elif vnf == 'ntopng':
+        result = run_config(v1, pod_name, namespace, 'ps aux', 'ntopng')
+    elif vnf == 'Suricata':
+        result = run_config(v1, pod_name, namespace, 'systemctl is-active suricata', 'active', exactly=True)
+    else:
+        print('weried...')
+    if result == True:
+        return True
+    elif result == False:
+        return 'Your code is run well, but when I check the VM, VNF is not installed correctly as intended.'
+    else:
+        return result        
 
 def delete_pod(v1, pod_name, namespace=namespace, logging_=False):
     try:

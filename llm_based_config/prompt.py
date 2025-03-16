@@ -107,11 +107,13 @@ def prompt(lang, system):
             With reference next, please write the YAML code for Ansible that automates the installation and configuration process in MOP.
             Here are 'example' configuration codes by YAML to create and configurate a CNF in Kubernetes using Ansible. \n'''
             good_example_str + \
-            f'''\nPlease rememeber, these are example code, so you have to just refer to them. 
+            f'''\nPlease rememeber, these are example code, so you have to just refer to them.
             For detailed CNF setup methods and parameters, follow the description in the MOP, not the example YAML code.
-            Kubernetes is already installed well, and to connect the node, you may need the Kubernetes configuration file and it's path is '/home/dpnm/.kube/config'.
-            You should use '{pod_name}' as a Pod's name, and '{namespace}' as a namespace.'''
-        
-            prompts_2= f'''Here is the MOP: '''
+            In this way, I hope that the same process as MOP will be performed by executing the Ansible with your YAML code.'''
+            
+            prompts_2= f'''Kubernetes is already installed well, and to connect the node, you may need the Kubernetes configuration file and it's path is '/home/dpnm/.kube/config'.
+            You should use '{pod_name}' as a Pod's name, and '{namespace}' as a namespace, use 'nicolaka/netshoot' image.
+            You should put 'sleep infinity' command, so that container dosen't killed.        
+            Here is the MOP: '''
 
     return prompts_1, prompts_2

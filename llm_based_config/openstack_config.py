@@ -6,7 +6,8 @@ import multiprocessing
 import io
 from python_code_modify import wrap_code_in_main
 from make_new_floating_ip import make_new_floating_ip, delete_floating_vm
-
+from secret import JUMP_HOST_IP, JUMP_HOST_PWD
+import time
 
 # Just now, preventing the infinite loop by remove top-tier code.
 # I really try hard to run with time-out, but all fails. Hold on now.
@@ -109,17 +110,6 @@ def vm_ssh_config_check(vm_ssh, input, output, exactly=False):
             return True
     return False
 
-def vm_ssh_config_check(vm_ssh, input, output, exactly=False):
-    stdin, stdout, stderr = vm_ssh.exec_command(input)
-    if exactly:
-        msg = stdout.read().decode("utf-8").strip()
-        if msg == output:
-            return True
-    else:
-        msg = stdout.read().decode("utf-8")
-        if output in msg:
-            return True
-    return False
 
 def wait_for_destination_ssh(ssh, destination_host, ssh_username, ssh_password, conn, floating_server):
     try:
@@ -153,7 +143,7 @@ def wait_for_destination_ssh(ssh, destination_host, ssh_username, ssh_password, 
             return False
         
 
-def test_configuration(server, vnf, model, vm_num, conn, floating_server):
+def test_openstack_configuration(server, vnf, model, vm_num, conn, floating_server):
     jump_host_ssh = paramiko.SSHClient()
     jump_host_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     config_file_path = 'OpenStack_Conf/'
