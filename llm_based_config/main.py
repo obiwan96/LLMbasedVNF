@@ -1,4 +1,5 @@
 from langchain_community.llms import Ollama
+from langchain.llms import OpenAI
 from langchain.chains import ConversationChain
 from langchain.memory import ConversationBufferMemory
 from secret import OPENAI_API_KEY, JUMP_HOST_IP, JUMP_HOST_PWD
@@ -17,13 +18,18 @@ from datetime import datetime
 import logging
 import time
 
-from prompt import prompt, pod_name, namespace
+from prompt import prompt, namespace
 from openstack_config import * 
 from kubernetes_config import *
 
 logging.getLogger("paramiko").setLevel(logging.CRITICAL) 
 
-
+class O3MiniLLM(OpenAI):
+    def _default_params(self):
+        params = super()._default_params()
+        if "temperature" in params:
+            del params["temperature"]
+        return params
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
     argparser.add_argument('--OpenStack', action='store_true')
@@ -59,11 +65,12 @@ if __name__ == '__main__':
         f.write('')
     model_list=[]
     if argparser.gpt:
-            model_list.extend(["gpt-o3-mini", "gpt-4o"])
+            model_list.extend(["gpt-3.5-turbo", "gpt-4o"])
     if argparser.llama:
             model_list.extend(["llama3.3", "codellama:70b"])
     if not argparser.gpt and not argparser.llama:
-        model_list= ["gpt-o3-mini", "gpt-4o", "llama3.3", "codellama:70b", 
+        # Trying to use o3-mini, but get errors.. I think langchain version is issue, need to search.
+        model_list= ["gpt-3.5-turbo", "gpt-4o", "llama3.3", "codellama:70b", 
                      "qwen2.5-coder:32b", "qwen2:72b", "deepseek-r1:70b", "gemma3:27b", "codegemma:7b"]
     num_ctx_list = {
         "llama3.3" : 8192,
@@ -100,7 +107,7 @@ if __name__ == '__main__':
     #if not floating_server:
     #    print('Make flaoting IP failed')
     #    exit()
-    for mop_file in tqdm(mop_list[:3]):
+    for mop_file in tqdm(mop_list[10:15]):
         if mop_file in already_done:
             continue
         mop_suc_num=0
@@ -143,6 +150,8 @@ if __name__ == '__main__':
             start_time = time.time()
             if model.startswith('gpt'):
                 llm = ChatOpenAI(temperature=0, model_name=model)
+            elif model.startswith('o3'):
+                llm = O3MiniLLM(model_name=model)
             else:   
                 llm = Ollama(model=model, num_ctx=num_ctx_list[model])
             chat = ConversationChain(llm=llm, memory = ConversationBufferMemory())
@@ -160,7 +169,7 @@ if __name__ == '__main__':
                 if form=='Python':
                     test_result, server_or_message = test_creation_python(llm_response, vnf, model, vm_num[vnf])
                 else:
-                    test_result, server_or_message = test_creation_ansible(llm_response, vnf, model, vm_num[vnf], v1)
+                    test_result, server_or_message = test_creation_ansible(llm_response, vnf, model, vm_num[vnf], v1, 500)
                 spend_time[1] = time.time()-start_time
                 if test_result == True:
                     if system_name=='OpenStack':
@@ -199,7 +208,7 @@ if __name__ == '__main__':
                     if system_name=='OpenStack':
                         conn.delete_server(server_or_message.id)
                     if system_name=='Kubernetes':
-                        delete_pod(v1, pod_name, namespace, logging_=True)
+                        delete_pod(v1, server_or_message, namespace, logging_=True)
                     if second_test_result == True:
                         process_time[model].append(spend_time)
                         success_num_by_vnf[vnf]['success_num'] += 1
