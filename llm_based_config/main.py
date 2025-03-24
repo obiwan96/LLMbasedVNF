@@ -58,6 +58,7 @@ if __name__ == '__main__':
     elif argparser.K8S:
         config.load_kube_config()
         v1 = client.CoreV1Api()
+        apps_v1 = client.AppsV1Api()
     
     logging_file = 'log.txt'
     logging_file_for_vnf = 'log_vnf.txt'
@@ -107,7 +108,7 @@ if __name__ == '__main__':
     #if not floating_server:
     #    print('Make flaoting IP failed')
     #    exit()
-    for mop_file in tqdm(mop_list[10:15]):
+    for mop_file in tqdm(mop_list[29:]):
         if mop_file in already_done:
             continue
         mop_suc_num=0
@@ -169,7 +170,7 @@ if __name__ == '__main__':
                 if form=='Python':
                     test_result, server_or_message = test_creation_python(llm_response, vnf, model, vm_num[vnf])
                 else:
-                    test_result, server_or_message = test_creation_ansible(llm_response, vnf, model, vm_num[vnf], v1, 500)
+                    test_result, server_or_message = test_creation_ansible(llm_response, vnf, model, vm_num[vnf], v1, 600)
                 spend_time[1] = time.time()-start_time
                 if test_result == True:
                     if system_name=='OpenStack':
@@ -208,7 +209,7 @@ if __name__ == '__main__':
                     if system_name=='OpenStack':
                         conn.delete_server(server_or_message.id)
                     if system_name=='Kubernetes':
-                        delete_pod(v1, server_or_message, namespace, logging_=True)
+                        delete_pod(v1, server_or_message, namespace)
                     if second_test_result == True:
                         process_time[model].append(spend_time)
                         success_num_by_vnf[vnf]['success_num'] += 1
@@ -248,7 +249,7 @@ if __name__ == '__main__':
             if system_name=='OpenStack':
                 delete_vms_after(conn, target_datetime)
             elif system_name=='Kubernetes':
-                delete_all_pods(v1)
+                delete_all_pods(v1, apps_v1)
         # change next print operations to write in the logging_file
         if logging_:
             with open(logging_file, 'a') as f:

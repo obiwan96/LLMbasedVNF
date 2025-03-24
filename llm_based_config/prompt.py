@@ -112,7 +112,12 @@ def prompt(lang, system):
             In this way, I hope that the same process as MOP will be performed by executing the Ansible with your YAML code.'''
             
             prompts_2= f'''Kubernetes is already installed well, and to connect the node, you may need the Kubernetes configuration file and it's path is '/home/dpnm/.kube/config'.
-            You should use '{pod_name}' as a Pod's name, and '{namespace}' as a namespace, use 'nicolaka/netshoot' image.
+            You should leave the pod name, namespace, and image parts as variables so that they can be passed separately as variables. 
+            Each factor name is 'pod_name', 'namespace', and 'image_name'. 
+            Except for these three, don't leave them as variables, but write them yourself.
+            I will run your code with my variables, so don't put 'vars' in the code.
+            Instead of following the DNS settings of the cluster, set the DNS of '10.100.80.140' on your own. 
+            For these parts, it would be helpful to refer to the example code.
             You should put 'sleep infinity' command, so that container dosen't killed.        
             Here is the MOP: '''
 
