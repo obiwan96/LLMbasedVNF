@@ -18,6 +18,7 @@ from datetime import datetime
 import logging
 import time
 
+from RAG import RAG
 from prompt import prompt, namespace
 from openstack_config import * 
 from kubernetes_config import *
@@ -38,6 +39,7 @@ if __name__ == '__main__':
     argparser.add_argument('--Python', action='store_true')
     argparser.add_argument('--gpt', action='store_true')
     argparser.add_argument('--llama', action='store_true')
+    argparser.add_argument('--rag', action='store_true')
     argparser=argparser.parse_args()
     if argparser.OpenStack:
         mop_file_path = '../mop/OpenStack_v3/'
@@ -71,7 +73,7 @@ if __name__ == '__main__':
             model_list.extend(["llama3.3", "codellama:70b"])
     if not argparser.gpt and not argparser.llama:
         # Trying to use o3-mini, but get errors.. I think langchain version is issue, need to search.
-        model_list= ["gpt-3.5-turbo", "gpt-4o", "llama3.3", "codellama:70b", 
+        model_list= ["gpt-3.5-turbo", "gpt-4o", "llama3.3", #"codellama:70b", 
                      "qwen2.5-coder:32b", "qwen2:72b", "deepseek-r1:70b", "gemma3:27b", "codegemma:7b"]
     num_ctx_list = {
         "llama3.3" : 8192,
@@ -86,6 +88,13 @@ if __name__ == '__main__':
         "qwen2.5-coder:32b" : 8192,
         "codegemma:7b" : 8192
     }
+
+    if argparser.rag:
+        if argparser.OpenStack:
+            db_name = 'RAG/openstack_docs.db'
+        if argparser.K8S:
+            db_name = 'RAG/kubernetes_docs.db'
+        collection, embed_model = RAG.RAG_init(db_name)
     all_mop_num = len(mop_list)
     first_create_success_num = {}
     first_config_success_num = {}
@@ -108,7 +117,7 @@ if __name__ == '__main__':
     #if not floating_server:
     #    print('Make flaoting IP failed')
     #    exit()
-    for mop_file in tqdm(mop_list[29:]):
+    for mop_file in tqdm(mop_list[:5]):
         if mop_file in already_done:
             continue
         mop_suc_num=0
@@ -232,8 +241,19 @@ if __name__ == '__main__':
                                 f.write(str(second_test_result)+'\n')
                         if _ < maximum_tiral-1:
                             start_time = time.time()
-                            llm_response=chat.invoke('When I run your code, I can successfully create VM, '+ \
-                                'but VNF configuration is failed. I got this error message. Please fix it.\n'+str(second_test_result))['response']
+                            if argparser.rag:
+                                retrieved_texts=RAG.RAG_search(second_test_result, collection, embed_model)
+                                second_test_result= str(second_test_result) + '\n And here is a related document. Please refer to it.' + retrieved_texts
+                                if logging_:
+                                    with open(logging_file, 'a') as f:
+                                        f.write ('RAG results:\n')
+                                        f.write(retrieved_texts+'\n')
+                            if system_name=='OpenStack':
+                                llm_response=chat.invoke('When I run your code, I can successfully create VM, '+ \
+                                    'but VNF configuration is failed. I got this error message. Please fix it.\n'+str(second_test_result))['response']
+                            if system_name == 'Kubernetes':
+                                llm_response=chat.invoke('When I run your code, I can successfully create Pod, '+ \
+                                    'but VNF is not installed correctly as intended. Please fix it.\n'+str(second_test_result))['response']
                 else:
                     # VM Creation failed
                     if logging_:
@@ -244,6 +264,13 @@ if __name__ == '__main__':
                         #print(test_result)
                         #print(f'{_+2} try')
                         start_time = time.time()
+                        if argparser.rag and 'Ansible runner status:' in str(server_or_message):
+                            retrieved_texts=RAG.RAG_search(server_or_message, collection, embed_model)
+                            server_or_message= str(server_or_message) + '\n And here is a related document. Please refer to it.' + retrieved_texts
+                            if logging_:
+                                with open(logging_file, 'a') as f:
+                                    f.write ('RAG results:\n')
+                                    f.write(retrieved_texts+'\n')
                         llm_response=chat.invoke('When I run your code, I got this error message, and failed to create VM. Please fix it.\n'+str(server_or_message))['response']
             # Delete all VMs created after the target time
             if system_name=='OpenStack':

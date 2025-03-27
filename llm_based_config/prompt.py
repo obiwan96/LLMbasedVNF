@@ -102,23 +102,30 @@ def prompt(lang, system):
             return 'need to implement'
         # Let's do Kubernetes Ansible first!
         elif system== 'Kubernetes':
-            prompts_1 = '''You are an Kubernetes cloud expert. I'll give you a Method Of Procedure (MOP),
-            which describes the process of installing a Pod in Kubernetes and installing and configure the CNF specified in the MOP on the Pod. 
-            With reference next, please write the YAML code for Ansible that automates the installation and configuration process in MOP.
-            Here are 'example' configuration codes by YAML to create and configurate a CNF in Kubernetes using Ansible. \n'''
+            prompts_1 = '''You are a Kubernetes cloud expert. 
+            I will provide you with a Method of Procedure (MOP), which outlines the steps for deploying a Pod in Kubernetes and installing and configuring the CNF specified in the MOP on that Pod.
+            Based on this, please write the corresponding Ansible YAML code that automates the installation and configuration process described in the MOP.
+
+            Below are example YAML configuration snippets for creating and configuring a CNF in Kubernetes using Ansible.\n'''
             good_example_str + \
             f'''\nPlease rememeber, these are example code, so you have to just refer to them.
-            For detailed CNF setup methods and parameters, follow the description in the MOP, not the example YAML code.
-            In this way, I hope that the same process as MOP will be performed by executing the Ansible with your YAML code.'''
+            For detailed CNF setup methods and parameters, follow the description in the MOP, not the example YAML code.'''
             
-            prompts_2= f'''Kubernetes is already installed well, and to connect the node, you may need the Kubernetes configuration file and it's path is '/home/dpnm/.kube/config'.
-            You should leave the pod name, namespace, and image parts as variables so that they can be passed separately as variables. 
-            Each factor name is 'pod_name', 'namespace', and 'image_name'. 
-            Except for these three, don't leave them as variables, but write them yourself.
-            I will run your code with my variables, so don't put 'vars' in the code.
-            Instead of following the DNS settings of the cluster, set the DNS of '10.100.80.140' on your own. 
+            prompts_2= f'''Kubernetes is already properly installed on another server, and the configuration file to connect to it is located at the default path.
+            So I can access the Kubernetes server from the current server. 
+            Please write code that connects to the Kubernetes server and creates a pod there. 
+            Do not write any code that performs direct actions on the local server or inside the Kubernetes pod.
+            
+            You should keep the pod name, namespace, and image fields as variables, so they can be passed separately.
+            The variable names are 'pod_name', 'namespace', and 'image_name'.
+            Aside from these three, do not use any other variables—please write all other values explicitly.
+            I will run the code using my own variables, so do not include a 'vars' section in the code.
+            Also, instead of using the cluster's default DNS settings, manually set the DNS to 10.100.80.140.
             For these parts, it would be helpful to refer to the example code.
-            You should put 'sleep infinity' command, so that container dosen't killed.        
+            You should put 'sleep infinity' command, so that container dosen't killed.
+            Through this, I want to be able to create the desired Pod by simply providing the values for the three variables — 'pod_name', 'namespace', and 'image_name' — and running the Ansible playbook you provide without making any modifications to the code. 
+            My goal is to fully automate the MOP process.
+            Please write it as a single code block, not separated into multiple pieces.
             Here is the MOP: '''
 
     return prompts_1, prompts_2

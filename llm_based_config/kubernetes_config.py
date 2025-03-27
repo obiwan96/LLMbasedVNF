@@ -18,8 +18,10 @@ def update_yml(data):
             if key == 'namespace':
                 data[key] = '{{ namespace }}'
             if key == 'definition' and 'metadata' in value:
-                data[key]['metadata']['name'] = '{{ pod_name }}'
-                data[key]['metadata']['namespace'] = '{{ namespace }}'
+                if 'name' in data[key]['metadata'].keys():
+                    data[key]['metadata']['name'] = '{{ pod_name }}'
+                if 'namespace' in data[key]['metadata'].keys():
+                    data[key]['metadata']['namespace'] = '{{ namespace }}'
             elif key == 'hostNetwork':
                 # hostNetwork should be false!!
                 # If not, Pod's network confiugration effect to Node's
@@ -30,7 +32,7 @@ def update_yml(data):
         for item in data:
             update_yml(item)
 
-def check_yml_if_do_in_localhost(data):
+def check_yml_if_do_in_localhost_or_nodes(data):
     for play in data:
         if "hosts" in play:
             if str(play["hosts"]).strip().lower() == "localhost":
@@ -39,6 +41,8 @@ def check_yml_if_do_in_localhost(data):
                         if not 'k8s' in str(task) and not 'kubernetes' in str(task):
                             # Suspect. It may do something in localhost.
                             return False
+            if str(play["hosts"]).strip().lower() == "all":
+                return False
     return True
 
 class OutputCollector:
@@ -69,8 +73,8 @@ def test_creation_ansible(llm_response, vnf, model, vm_num, v1, timeout=300):
         pod_name= vnf.lower()+'-pod'
         yaml_data = yaml.safe_load(yml_code[0])
         update_yml(yaml_data)
-        if not check_yml_if_do_in_localhost(yaml_data):
-            return False, f"Your YAML code do something in localhost, but you don't anything to do in localhost. Please modify it to work in Kubernetes."
+        if not check_yml_if_do_in_localhost_or_nodes(yaml_data):
+            return False, f'''Your YAML code runs on localhost or Kubernetes nodes, but there's no task to perform there. Please update it to run only inside Kubernetes.'''
         #if not '{{ pod_name }}' in str(yaml_data) or not '{{ namespace }}' in str(yaml_data):
         #    return False, f"YAML parsing failed. Please use {pod_name} as pod name and {namespace} as namespace in the YAML code by refering the example code."
     except:
@@ -97,7 +101,10 @@ def test_creation_ansible(llm_response, vnf, model, vm_num, v1, timeout=300):
 
         #print("상태:", response.status)
         #print("반환 코드:", response.rc)
+        
         if runner.rc == 0:
+            if 'skipping: no hosts matched' in collector.captured_output:
+                return False, 'There was a task that was skipped due to an incorrect host name. Please correct the host name.'
             # Ansible run well
             try:
                 # Wait for creation success for Pod.                
@@ -153,7 +160,7 @@ def run_config(v1, pod_name, namespace, input, output, exactly=False):
         #print("명령어 실행 결과:")
         #print(response)
     except ApiException as e:
-        return e
+        return str(e)
     #print( response)
     if exactly:
         #mresponsesg = response.read().decode("utf-8").strip()
@@ -183,10 +190,8 @@ def test_K8S_configuration(pod_name, vnf, model, vm_num, v1, namespace):
         print('weried...')
     if result == True:
         return True
-    elif result == False:
-        return 'Your code is run well, but when I check the VM, VNF is not installed correctly as intended. When I run it, it return:\n'+result
     else:
-        return result        
+        return 'When I run VNF to check it, it return:\n'+result    
 
 def delete_pod(v1, pod_name, namespace=namespace, logging_=False):
     try:
