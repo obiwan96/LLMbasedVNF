@@ -7,6 +7,7 @@ import argparse
 def create_table(db_name):
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
+    cursor.execute("DROP TABLE IF EXISTS documents")
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS documents (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,6 +102,59 @@ def crawl_kube_page(url, cursor, conn, visited):
     except Exception as e:
         print(f"Error crawling {url}: {e}")
     return True
+
+def crawl_ansible_page(url, cursor, conn, visited_urls):
+    base_link = 'https://docs.ansible.com/ansible/latest/'
+    response = requests.get(url, timeout=1)
+
+    if response.status_code != 200:
+        print(f"Failed to fetch {url}")
+        return False
+
+    soup = BeautifulSoup(response.text, 'lxml')
+    links = soup.find_all('a',attrs={"class":"reference internal"})
+    for link in links:
+        link = link.get('href')
+        if 'roadmap' in link:
+            continue
+        if link in visited_urls:
+            continue
+        visited_urls.add(link)
+        #print('Visiting '+ base_link+link)
+        success=False
+        for _ in range(3):
+            try:
+                response = requests.get(base_link+link, timeout=1)
+                success=True
+                break
+            except:
+                time.sleep(1)
+                continue
+        if not success or response.status_code != 200:
+            print(f"Failed to fetch {base_link+link}")
+            continue
+        soup = BeautifulSoup(response.text, 'lxml')
+
+        big_title = soup.title.string.strip() if soup.title else "No Title"
+        article_div = soup.find("div", attrs={"itemprop": "articleBody"})
+        if article_div:
+            sections = article_div.find_all("section", id=True)
+            for section in sections:
+                title = section['id']
+                filtered_elements = section.find_all(['p', 'div'])
+                content=  "\n".join(str(elem.get_text()) for elem in filtered_elements)
+                #print('###################')
+                #print(big_title+' / '+ title)
+                #print(content)
+                cursor.execute('INSERT INTO documents (url, title, content) VALUES (?, ?, ?)', (url, big_title+' / '+title, content))
+                conn.commit()
+
+        print(f"Crawled: {title}, url: {base_link+link}")
+        time.sleep(1.5) 
+
+    
+    return True
+
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--openstack', action='store_true', help='Crawl OpenStack docs')
@@ -132,9 +186,9 @@ if __name__=='__main__':
         print(f'Total {len(visited_urls)} nums of doc. crawled.')
         conn.close()
     if args.ansible or args.all:    
-        conn, cursor = create_table('ansible_docs.db')
-        start_url = "https://docs.ansible.com/"
+        conn, cursor = create_table('ansible_docs.db')   
         visited_urls = set()
-        crawl_page(start_url, cursor, conn, visited_urls)
+        start_url = "https://docs.ansible.com/ansible/latest/index.html"
+        crawl_ansible_page(start_url, cursor, conn,visited_urls)
         print(f'Total {len(visited_urls)} nums of doc. crawled.')
         conn.close()

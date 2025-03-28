@@ -173,25 +173,29 @@ def run_config(v1, pod_name, namespace, input, output, exactly=False):
     return response
 
 def test_K8S_configuration(pod_name, vnf, model, vm_num, v1, namespace):
-    config_file_path = 'K8S_Conf/'
     if vnf == 'firewall':
-        result = run_config(v1, pod_name, namespace, 'sudo iptables -L -v -n', 'DROP')
+        input_operation , output_operation, exactly = 'sudo iptables -L -v -n', 'DROP', False
     elif vnf == 'Haproxy':
-        result = run_config(v1, pod_name, namespace, 'systemctl is-active haproxy', 'active', exactly=True)
-        if result == True:
-            result = run_config(v1, pod_name, namespace, 'haproxy -c -f /etc/haproxy/haproxy.cfg', 'Configuration file is valid')
+        input_operation , output_operation, exactly = 'systemctl is-active haproxy', 'active', True
     elif vnf == 'nDPI':
-        result = run_config(v1, pod_name, namespace, 'ps aux', 'ndpiReader')
+        input_operation , output_operation, exactly = 'ps aux', 'ndpiReader', False
     elif vnf == 'ntopng':
-        result = run_config(v1, pod_name, namespace, 'ps aux', 'ntopng')
+        input_operation , output_operation, exactly = 'ps aux', 'ntopng', False
     elif vnf == 'Suricata':
-        result = run_config(v1, pod_name, namespace, 'systemctl is-active suricata', 'active', exactly=True)
+        input_operation , output_operation, exactly = 'systemctl is-active suricata', 'active', True 
     else:
         print('weried...')
+    result = run_config(v1, pod_name, namespace, input_operation, output_operation, exactly)
     if result == True:
+        if vnf == 'Haproxy':
+            result = run_config(v1, pod_name, namespace, 'haproxy -c -f /etc/haproxy/haproxy.cfg', 'Configuration file is valid', False)
+            if result == True:
+                return True
+            else:
+                return "When I put 'haproxy -c -f /etc/haproxy/haproxy.cfg' operation in Pod to check the VNF, but got this results. \n"+ result+ "It should return 'Configuration file is valid'."
         return True
     else:
-        return 'When I run VNF to check it, it return:\n'+result    
+        return f"When I put '{input_operation}' operation in Pod to check VNF, it return:\n"+result+ f"It should return '{output_operation}'."
 
 def delete_pod(v1, pod_name, namespace=namespace, logging_=False):
     try:

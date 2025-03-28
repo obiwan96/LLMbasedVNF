@@ -40,6 +40,8 @@ if __name__ == '__main__':
     argparser.add_argument('--gpt', action='store_true')
     argparser.add_argument('--llama', action='store_true')
     argparser.add_argument('--rag', action='store_true')
+    argparser.add_argument('--skip', action='store_true')
+
     argparser=argparser.parse_args()
     if argparser.OpenStack:
         mop_file_path = '../mop/OpenStack_v3/'
@@ -73,7 +75,7 @@ if __name__ == '__main__':
             model_list.extend(["llama3.3", "codellama:70b"])
     if not argparser.gpt and not argparser.llama:
         # Trying to use o3-mini, but get errors.. I think langchain version is issue, need to search.
-        model_list= ["gpt-3.5-turbo", "gpt-4o", "llama3.3", #"codellama:70b", 
+        model_list= ["gpt-3.5-turbo", "gpt-4o", "llama3.3", "codellama:70b", 
                      "qwen2.5-coder:32b", "qwen2:72b", "deepseek-r1:70b", "gemma3:27b", "codegemma:7b"]
     num_ctx_list = {
         "llama3.3" : 8192,
@@ -90,11 +92,16 @@ if __name__ == '__main__':
     }
 
     if argparser.rag:
+        db_list=[]
         if argparser.OpenStack:
-            db_name = 'RAG/openstack_docs.db'
+            db_list.append('RAG/openstack_docs.db')
+            if argparser.python:
+                db_list.append('RAG/openstacksdk_docs.db')
         if argparser.K8S:
-            db_name = 'RAG/kubernetes_docs.db'
-        collection, embed_model = RAG.RAG_init(db_name)
+            db_list.append('RAG/kubernetes_docs.db')
+        if argparser.Ansible:
+            db_list.append('RAG/ansible_docs.db')
+        collection, embed_model = RAG.RAG_init(db_list)
     all_mop_num = len(mop_list)
     first_create_success_num = {}
     first_config_success_num = {}
@@ -117,9 +124,10 @@ if __name__ == '__main__':
     #if not floating_server:
     #    print('Make flaoting IP failed')
     #    exit()
-    for mop_file in tqdm(mop_list[:5]):
-        if mop_file in already_done:
-            continue
+    for mop_file in tqdm(mop_list[:30]):
+        if argparser.skip:    
+            if mop_file in already_done:
+                continue
         mop_suc_num=0
         vnf = mop_file.split('_')[1]
         lang = mop_file.split('_')[4]
@@ -241,7 +249,8 @@ if __name__ == '__main__':
                                 f.write(str(second_test_result)+'\n')
                         if _ < maximum_tiral-1:
                             start_time = time.time()
-                            if argparser.rag:
+                            if argparser.rag and False:
+                                # VNF configuration related docs are not crawled yet. Only OpenStack and K8S.
                                 retrieved_texts=RAG.RAG_search(second_test_result, collection, embed_model)
                                 second_test_result= str(second_test_result) + '\n And here is a related document. Please refer to it.' + retrieved_texts
                                 if logging_:
@@ -253,7 +262,7 @@ if __name__ == '__main__':
                                     'but VNF configuration is failed. I got this error message. Please fix it.\n'+str(second_test_result))['response']
                             if system_name == 'Kubernetes':
                                 llm_response=chat.invoke('When I run your code, I can successfully create Pod, '+ \
-                                    'but VNF is not installed correctly as intended. Please fix it.\n'+str(second_test_result))['response']
+                                    'but VNF is not installed correctly as intended. Please fix it by refering MOP again.\n'+str(second_test_result))['response']
                 else:
                     # VM Creation failed
                     if logging_:
