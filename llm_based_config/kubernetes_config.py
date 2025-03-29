@@ -45,6 +45,11 @@ def check_yml_if_do_in_localhost_or_nodes(data):
                 return False
     return True
 
+def ansi_result_clear(ansible_output):
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    clean_output = ansi_escape.sub('', ansible_output)
+    return clean_output
+
 class OutputCollector:
     def __init__(self):
         self.captured_output = ''
@@ -57,13 +62,13 @@ def test_creation_ansible(llm_response, vnf, model, vm_num, v1, timeout=300):
     config_file_path = 'K8S_Conf/'
     if not os.path.exists(config_file_path):
         os.makedirs(config_file_path)
-    code_pattern = r'```yaml(.*?)```'
-    code_pattern_second = r'```(.*?)```'
+    code_pattern_list = [r'```yaml(.*?)```', r'```(.*?)```', r'-{50,}\n(.*?)\n-{50,}', r'^---\n(.*)$']
 
     try:
-        yml_code = re.findall(code_pattern, llm_response, re.DOTALL)
-        if not yml_code:
-            yml_code = re.findall(code_pattern_second, llm_response, re.DOTALL)
+        for code_pattern in code_pattern_list:
+            yml_code = re.findall(code_pattern, llm_response, re.DOTALL)
+            if yml_code:
+                break
     except:
         #print('parsing fail')
         return False, "I can't see YAML code in your response."
@@ -136,7 +141,8 @@ def test_creation_ansible(llm_response, vnf, model, vm_num, v1, timeout=300):
                     return False, "Error while searching Pod"
             
         else:
-            return False, 'Ansible run failed. Ansible runner status: '+runner.status + '\n Here are Ansible running results:\n'+collector.captured_output
+            ansible_output=ansi_result_clear(collector.captured_output)
+            return False, 'Ansible run failed. Ansible runner status: '+runner.status + '\n Here are Ansible running results:\n'+ansible_output
 
     except Exception as e:
         #print(e)

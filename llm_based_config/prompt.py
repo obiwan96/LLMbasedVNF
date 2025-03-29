@@ -7,7 +7,7 @@ namespace = 'llm-config'
 def read_good_example(method, platform, example_path = 'Good_Example/'):
     good_example = {}
     for file in os.listdir(example_path):
-        if platform in file and file.endswith(method):
+        if platform.lower() in file.lower() and file.endswith(method):
             with open(example_path+file, 'r') as f:
                 good_example[file] = f.read()
     return good_example

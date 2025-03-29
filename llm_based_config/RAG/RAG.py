@@ -15,7 +15,7 @@ def RAG_init(db_names):
     embed_model = SentenceTransformer('all-MiniLM-L6-v2')
 
     documents = []
-    for dbname in db_names:
+    for db_name in db_names:
         conn = sqlite3.connect(db_name)
         cursor = conn.cursor()
         cursor.execute("SELECT id, title, content FROM documents")
@@ -35,7 +35,7 @@ def RAG_init(db_names):
 def RAG_search(query, collection, embed_model, n_results=1):
     # vector search only now.
     # Todo: Graph based search
-    query_embedding = embed_model.encode(query).tolist()
+    query_embedding = embed_model.encode(str(query)).tolist()
 
     results = collection.query(query_embeddings=[query_embedding], n_results=n_results)
 

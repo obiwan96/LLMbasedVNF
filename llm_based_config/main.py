@@ -1,10 +1,11 @@
 from langchain_community.llms import Ollama
-from langchain.llms import OpenAI
+#from langchain.llms import OpenAI
 from langchain.chains import ConversationChain
 from langchain.memory import ConversationBufferMemory
 from secret import OPENAI_API_KEY, JUMP_HOST_IP, JUMP_HOST_PWD
 from already_done import already_done
-from langchain.chat_models import ChatOpenAI
+#from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI # to use o3-mini, use langchain_openai 0.3.x 
 import argparse
 from kubernetes import client, config, stream
 
@@ -25,12 +26,6 @@ from kubernetes_config import *
 
 logging.getLogger("paramiko").setLevel(logging.CRITICAL) 
 
-class O3MiniLLM(OpenAI):
-    def _default_params(self):
-        params = super()._default_params()
-        if "temperature" in params:
-            del params["temperature"]
-        return params
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
     argparser.add_argument('--OpenStack', action='store_true')
@@ -39,6 +34,7 @@ if __name__ == '__main__':
     argparser.add_argument('--Python', action='store_true')
     argparser.add_argument('--gpt', action='store_true')
     argparser.add_argument('--llama', action='store_true')
+    argparser.add_argument('--code-llm', action='store_true')
     argparser.add_argument('--rag', action='store_true')
     argparser.add_argument('--skip', action='store_true')
 
@@ -70,13 +66,15 @@ if __name__ == '__main__':
         f.write('')
     model_list=[]
     if argparser.gpt:
-            model_list.extend(["gpt-3.5-turbo", "gpt-4o"])
+        model_list.extend(["gpt-3.5-turbo", "gpt-4o", "o3-mini"])
     if argparser.llama:
-            model_list.extend(["llama3.3", "codellama:70b"])
+        model_list.extend(["llama3.3", "codellama:70b"])
+    if argparser.code_llm:
+        model_list.extend(["codellama:70b", "qwen2.5-coder:32b", "codegemma:7b"])
     if not argparser.gpt and not argparser.llama:
         # Trying to use o3-mini, but get errors.. I think langchain version is issue, need to search.
-        model_list= ["gpt-3.5-turbo", "gpt-4o", "llama3.3", "codellama:70b", 
-                     "qwen2.5-coder:32b", "qwen2:72b", "deepseek-r1:70b", "gemma3:27b", "codegemma:7b"]
+        model_list= ["gpt-3.5-turbo", "gpt-4o", "o3-mini", "llama3.3", 
+                     "qwen2.5-coder:32b", "qwen2:72b", "deepseek-r1:70b", "gemma3:27b"]
     num_ctx_list = {
         "llama3.3" : 8192,
         "llama3.1:70b" : 8192,
@@ -169,7 +167,7 @@ if __name__ == '__main__':
             if model.startswith('gpt'):
                 llm = ChatOpenAI(temperature=0, model_name=model)
             elif model.startswith('o3'):
-                llm = O3MiniLLM(model_name=model)
+                llm = ChatOpenAI(model_name=model)
             else:   
                 llm = Ollama(model=model, num_ctx=num_ctx_list[model])
             chat = ConversationChain(llm=llm, memory = ConversationBufferMemory())
@@ -274,7 +272,15 @@ if __name__ == '__main__':
                         #print(f'{_+2} try')
                         start_time = time.time()
                         if argparser.rag and 'Ansible runner status:' in str(server_or_message):
-                            retrieved_texts=RAG.RAG_search(server_or_message, collection, embed_model)
+
+                            # ToDo: currently consider only K8S. need to fix to consider OpenStack also.
+                            error_start = str(server_or_message).find("ERROR!")
+                            if error_start != -1:
+                                error_message = str(server_or_message)[error_start:]
+                                retrieved_texts=RAG.RAG_search(error_message, collection, embed_model)
+                            else:
+                                retrieved_texts=RAG.RAG_search(server_or_message, collection, embed_model)
+
                             server_or_message= str(server_or_message) + '\n And here is a related document. Please refer to it.' + retrieved_texts
                             if logging_:
                                 with open(logging_file, 'a') as f:
