@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 import sqlite3
 import time
 import argparse
+from stackapi import StackAPI
 
 def create_table(db_name):
     conn = sqlite3.connect(db_name)
@@ -13,6 +14,7 @@ def create_table(db_name):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             url TEXT,
             title TEXT,
+            question TEXT,
             content TEXT
         )
     ''')
@@ -60,6 +62,7 @@ def crawl_openstack_page(url, cursor, conn, visited):
     except Exception as e:
         print(f"Error crawling {url}: {e}")
     return True
+
 def crawl_kube_page(url, cursor, conn, visited):    
     if url in visited:
         print('already visited!')
@@ -150,10 +153,58 @@ def crawl_ansible_page(url, cursor, conn, visited_urls):
                 conn.commit()
 
         print(f"Crawled: {title}, url: {base_link+link}")
-        time.sleep(1.5) 
-
-    
+        time.sleep(1.5)     
     return True
+
+def html_to_text(html):
+    soup = BeautifulSoup(html, "html.parser")
+    return soup.get_text(separator="\n", strip=True)
+
+def crawl_stackoverflow(cursor, conn):
+    SITE = StackAPI('stackoverflow')
+    SITE.page_size = 100
+    SITE.max_pages = 20 # need fix? banned from stack oveflow
+    
+    keyword = 'Kubernetes'
+    # Todo: Maybe use multiple keywords later
+
+    questions_data = SITE.fetch('search/advanced', q=keyword, filter='withbody')
+    questions = questions_data.get('items', [])
+    
+    docs_num=0 
+    for question in questions:
+        if question.get('view_count', 0) < 500:
+            continue
+
+        q_id = question['question_id']
+        q_title = question.get('title', '')
+        q_body = html_to_text(question.get('body', ''))
+
+        answers_data = SITE.fetch('questions/{ids}/answers', ids=[q_id], filter='withbody')
+        answers = answers_data.get('items', [])
+
+        # Filtering the answers. Only remain answers with 2 or more votes
+        filtered_answers = []
+        for answer in answers:
+            score = answer.get('score', 0)
+            accepted = answer.get('is_accepted', False)
+            if score >= 2 or accepted:
+                filtered_answers.append(answer)
+
+        if not filtered_answers:
+            #There is no appropriate answer.
+            continue
+
+        total_answer=''
+        for answer in filtered_answers:
+            total_answer+=html_to_text(answer.get('body', ''))
+        cursor.execute('INSERT INTO documents (title, question, content) VALUES (?, ?, ?)', (q_title, q_body, total_answer))
+        conn.commit()
+        print(f"Crawled: {q_title}")
+        docs_num+=1
+        time.sleep(1)
+    
+    return docs_num
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
@@ -161,6 +212,7 @@ if __name__=='__main__':
     parser.add_argument('--openstacksdk', action='store_true', help='Crawl OpenStack SDK docs')
     parser.add_argument('--kubernetes', action='store_true', help='Crawl Kubernetes docs')
     parser.add_argument('--ansible', action='store_true', help='Crawl Ansible docs')
+    parser.add_argument('--stack', action='store_true', help='Crawl StackOverflow')
     parser.add_argument('--all', action='store_true', help='Crawl all docs')
     args = parser.parse_args()
     if args.openstack or args.all:
@@ -191,4 +243,10 @@ if __name__=='__main__':
         start_url = "https://docs.ansible.com/ansible/latest/index.html"
         crawl_ansible_page(start_url, cursor, conn,visited_urls)
         print(f'Total {len(visited_urls)} nums of doc. crawled.')
+        conn.close()
+    if args.stack or args.all:    
+        conn, cursor = create_table('stackoverflow_docs.db')   
+        visited_urls = set()
+        results = crawl_stackoverflow(cursor, conn)
+        print(f'Total {results} nums of doc. crawled.')
         conn.close()

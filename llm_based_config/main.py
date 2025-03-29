@@ -90,7 +90,8 @@ if __name__ == '__main__':
     }
 
     if argparser.rag:
-        db_list=[]
+        db_list=['RAG/stackoverflow_docs_cp.db']
+        # Todo: Stack overflow db creation banned now, so later, change this to original db.
         if argparser.OpenStack:
             db_list.append('RAG/openstack_docs.db')
             if argparser.python:
