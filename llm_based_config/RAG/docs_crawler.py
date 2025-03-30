@@ -1,5 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
+from bs4.element import NavigableString
 import sqlite3
 import time
 import argparse
@@ -20,10 +21,11 @@ def create_table(db_name):
     ''')
     conn.commit()
     return (conn, cursor)
-def crawl_openstack_page(url, cursor, conn, visited):
+def crawl_openstack_page(url, cursor, conn, visited, logging=False):
     base_link=url[:url.rfind('/')+1]
     if url in visited:
-        #print('already visited!')
+        if logging:
+            print('already visited!')
         return True
     visited.add(url)
 
@@ -38,6 +40,11 @@ def crawl_openstack_page(url, cursor, conn, visited):
         title = soup.title.string.strip() if soup.title else "No Title"
         if not 'OpenStack End User Guide' in title:
             content = ' '.join([p.get_text() for p in soup.find_all(['p', 'div'], class_="docs-body")])
+
+            if logging:
+                print('##################')
+                print(title)
+                print(content)
 
             cursor.execute('INSERT INTO documents (url, title, content) VALUES (?, ?, ?)', (url, title, content))
             conn.commit()
@@ -54,7 +61,7 @@ def crawl_openstack_page(url, cursor, conn, visited):
                 new_base_link = new_base_link[:new_base_link.rfind('/',0,last_lslash)+1]
                 href=href[3:]
             new_url = new_base_link+href
-            if not crawl_openstack_page(new_url, cursor, conn, visited):
+            if not crawl_openstack_page(new_url, cursor, conn, visited, logging):
                 print(url, new_url)
 
         time.sleep(1)
@@ -63,9 +70,10 @@ def crawl_openstack_page(url, cursor, conn, visited):
         print(f"Error crawling {url}: {e}")
     return True
 
-def crawl_kube_page(url, cursor, conn, visited):    
+def crawl_kube_page(url, cursor, conn, visited, logging=False):
     if url in visited:
-        print('already visited!')
+        if logging:
+            print('already visited!')
         return True
     visited.add(url)
 
@@ -76,18 +84,59 @@ def crawl_kube_page(url, cursor, conn, visited):
             return False
 
         soup = BeautifulSoup(response.text, 'lxml')
-  
-        title = soup.title.string.strip() if soup.title else "No Title"
-        content = ' '.join([p.get_text() for p in soup.find_all(['p', 'div'], class_="td-content")])
-        if not content=='':
-            #print('\n#####################################')
-            #print(title)
-            #print(content)
 
-            cursor.execute('INSERT INTO documents (url, title, content) VALUES (?, ?, ?)', (url, title, content))
+        # Let's put full a document and sub-documents together.
+  
+        big_title = soup.title.string.strip() if soup.title else "No Title"
+        content = ' '.join([p.get_text() for p in soup.find_all(['p', 'div'], class_="td-content")])
+        if not content =='':
+            if logging:
+                print('\n#####################################')
+                print(big_title)
+                print(content[:30])
+            cursor.execute('INSERT INTO documents (url, title, content) VALUES (?, ?, ?)', (url, big_title, content))
             conn.commit()
 
-            print(f"Crawled: {title}, url: {url}")
+            # Let's find small documents
+            content = soup.find_all(class_="td-content")
+            if content != []:
+                current_title = None
+                current_paragraph = []
+                for elem in content[0].descendants:
+                    if elem.name in ["h2", "h3"]:
+                        if current_title and current_paragraph:
+                            title=big_title+'/'+current_title
+                            content="\n".join(current_paragraph)
+                            if logging:
+                                print('\n#####################################')
+                                print(title)
+                                print(content[:50])
+                            cursor.execute('INSERT INTO documents (url, title, content) VALUES (?, ?, ?)', (url, title, content))
+                            conn.commit()
+                            print(f"Crawled: {title}")
+                            current_paragraph = []
+                        current_title = elem.get_text(strip=True)
+
+                    elif elem.name in ["p", "code", "li", "dd", "dfn", "pre", "strong", "em"]:
+                        text = elem.get_text(strip=True, separator=" ")
+                        if text:
+                            current_paragraph.append(text)
+
+                    elif isinstance(elem, NavigableString):
+                        text = elem.strip()
+                        if text:
+                            current_paragraph.append(text)
+
+                if current_title and current_paragraph:
+                    title=big_title+'/'+current_title
+                    content="\n".join(current_paragraph)
+                    if logging:
+                        print('\n#####################################')
+                        print(title)
+                        print(content[:50])
+                    cursor.execute('INSERT INTO documents (url, title, content) VALUES (?, ?, ?)', (url, title, content))
+                    conn.commit()
+                    print(f"Crawled: {title}")
    
         for ul in soup.find_all('ul'):
             for item in ul.find_all('li'):
@@ -97,16 +146,16 @@ def crawl_kube_page(url, cursor, conn, visited):
                     if not 'https://' in href or not 'docs' in href:
                         continue
                     
-                    if not crawl_kube_page(href, cursor, conn, visited):
+                    if not crawl_kube_page(href, cursor, conn, visited, logging):
                         print(url, href)
 
-        time.sleep(1) 
+        time.sleep(1.5) 
 
     except Exception as e:
         print(f"Error crawling {url}: {e}")
     return True
 
-def crawl_ansible_page(url, cursor, conn, visited_urls):
+def crawl_ansible_page(url, cursor, conn, visited_urls, logging=False):
     base_link = 'https://docs.ansible.com/ansible/latest/'
     response = requests.get(url, timeout=1)
 
@@ -123,7 +172,8 @@ def crawl_ansible_page(url, cursor, conn, visited_urls):
         if link in visited_urls:
             continue
         visited_urls.add(link)
-        #print('Visiting '+ base_link+link)
+        if logging:
+            print('Visiting '+ base_link+link)
         success=False
         for _ in range(3):
             try:
@@ -146,9 +196,10 @@ def crawl_ansible_page(url, cursor, conn, visited_urls):
                 title = section['id']
                 filtered_elements = section.find_all(['p', 'div'])
                 content=  "\n".join(str(elem.get_text()) for elem in filtered_elements)
-                #print('###################')
-                #print(big_title+' / '+ title)
-                #print(content)
+                if logging:
+                    print('###################')
+                    print(big_title+' / '+ title)
+                    print(content)
                 cursor.execute('INSERT INTO documents (url, title, content) VALUES (?, ?, ?)', (url, big_title+' / '+title, content))
                 conn.commit()
 
@@ -160,7 +211,7 @@ def html_to_text(html):
     soup = BeautifulSoup(html, "html.parser")
     return soup.get_text(separator="\n", strip=True)
 
-def crawl_stackoverflow(cursor, conn):
+def crawl_stackoverflow(cursor, conn, logging=False):
     SITE = StackAPI('stackoverflow')
     SITE.page_size = 100
     SITE.max_pages = 20 # need fix? banned from stack oveflow
@@ -198,11 +249,18 @@ def crawl_stackoverflow(cursor, conn):
         total_answer=''
         for answer in filtered_answers:
             total_answer+=html_to_text(answer.get('body', ''))
+        if logging:
+            print('####################')
+            print(q_title)
+            print('--------------------')
+            print(q_body)
+            print('Answer:')
+            print(total_answer)
         cursor.execute('INSERT INTO documents (title, question, content) VALUES (?, ?, ?)', (q_title, q_body, total_answer))
         conn.commit()
         print(f"Crawled: {q_title}")
         docs_num+=1
-        time.sleep(1)
+        time.sleep(2)
     
     return docs_num
 
@@ -214,39 +272,41 @@ if __name__=='__main__':
     parser.add_argument('--ansible', action='store_true', help='Crawl Ansible docs')
     parser.add_argument('--stack', action='store_true', help='Crawl StackOverflow')
     parser.add_argument('--all', action='store_true', help='Crawl all docs')
+    parser.add_argument('--logging', action='store_true', help='Logging or not')
+    
     args = parser.parse_args()
     if args.openstack or args.all:
         # OpenStack docs crawling
         conn, cursor = create_table('openstack_docs.db')
         start_url = "https://docs.openstack.org/mitaka/user-guide/index.html"
         visited_urls = set()
-        crawl_openstack_page(start_url, cursor, conn, visited_urls)
+        crawl_openstack_page(start_url, cursor, conn, visited_urls, args.logging)
         print(f'Total {len(visited_urls)} nums of doc. crawled.')
         conn.close()
     if args.openstacksdk or args.all:
         conn, cursor = create_table('openstacksdk_docs.db')
         start_url = "https://docs.openstack.org/openstacksdk/latest/user/index.html"
         visited_urls = set()
-        crawl_openstack_page(start_url, cursor, conn, visited_urls)
+        crawl_openstack_page(start_url, cursor, conn, visited_urls, args.logging)
         print(f'Total {len(visited_urls)} nums of doc. crawled.')
         conn.close()
     if args.kubernetes or args.all:
         conn, cursor = create_table('kubernetes_docs.db')
         start_url = "https://kubernetes.io/docs/home/"
         visited_urls = set()
-        crawl_kube_page(start_url, cursor, conn, visited_urls)
+        crawl_kube_page(start_url, cursor, conn, visited_urls, args.logging)
         print(f'Total {len(visited_urls)} nums of doc. crawled.')
         conn.close()
     if args.ansible or args.all:    
         conn, cursor = create_table('ansible_docs.db')   
         visited_urls = set()
         start_url = "https://docs.ansible.com/ansible/latest/index.html"
-        crawl_ansible_page(start_url, cursor, conn,visited_urls)
+        crawl_ansible_page(start_url, cursor, conn,visited_urls, args.logging)
         print(f'Total {len(visited_urls)} nums of doc. crawled.')
         conn.close()
     if args.stack or args.all:    
         conn, cursor = create_table('stackoverflow_docs.db')   
         visited_urls = set()
-        results = crawl_stackoverflow(cursor, conn)
+        results = crawl_stackoverflow(cursor, conn, args.logging)
         print(f'Total {results} nums of doc. crawled.')
         conn.close()

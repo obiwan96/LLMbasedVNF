@@ -70,28 +70,31 @@ if __name__ == '__main__':
     if argparser.llama:
         model_list.extend(["llama3.3", "codellama:70b"])
     if argparser.code_llm:
-        model_list.extend(["codellama:70b", "qwen2.5-coder:32b", "codegemma:7b"])
+        model_list.extend(["o3-mini", "codellama:70b", "qwen2.5-coder:32b", "codegemma:7b"])
     if not argparser.gpt and not argparser.llama:
         # Trying to use o3-mini, but get errors.. I think langchain version is issue, need to search.
-        model_list= ["gpt-3.5-turbo", "gpt-4o", "o3-mini", "llama3.3", 
-                     "qwen2.5-coder:32b", "qwen2:72b", "deepseek-r1:70b", "gemma3:27b"]
+        model_list= ["gpt-4o", "o3-mini", "llama3.3", 
+                     "qwen2.5-coder:32b", "qwen2:72b", "deepseek-r1:70b", "gemma2:27b", "gemma3:27b", 
+                     "qwq", "mistral", "phi4"]
     num_ctx_list = {
-        "llama3.3" : 8192,
+        "llama3.3" : 131072,
         "llama3.1:70b" : 8192,
         "qwen2" :8192,
-        "qwen2:72b" : 8192,
+        "qwen2:72b" : 32768,
         "gemma2" : 8192,
         "gemma2:27b" : 8192,
-        "gemma3:27b" : 8192,
-        "deepseek-r1:70b" : 8192,
-        "codellama:70b" : 8192,
-        "qwen2.5-coder:32b" : 8192,
-        "codegemma:7b" : 8192
+        "gemma3:27b" : 131072,
+        "deepseek-r1:70b" : 131072,
+        "codellama:70b" : 2048,
+        "qwen2.5-coder:32b" : 32768,
+        "codegemma:7b" : 8192,
+        "phi4":16384,
+        "mistral":32768,
+        "qwq": 40960
     }
 
     if argparser.rag:
-        db_list=['RAG/stackoverflow_docs_cp.db']
-        # Todo: Stack overflow db creation banned now, so later, change this to original db.
+        db_list=['RAG/stackoverflow_docs.db']
         if argparser.OpenStack:
             db_list.append('RAG/openstack_docs.db')
             if argparser.python:

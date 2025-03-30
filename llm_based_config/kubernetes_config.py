@@ -62,7 +62,7 @@ def test_creation_ansible(llm_response, vnf, model, vm_num, v1, timeout=300):
     config_file_path = 'K8S_Conf/'
     if not os.path.exists(config_file_path):
         os.makedirs(config_file_path)
-    code_pattern_list = [r'```yaml(.*?)```', r'```(.*?)```', r'-{50,}\n(.*?)\n-{50,}', r'^---\n(.*)$']
+    code_pattern_list = [r'```yaml(.*?)```', r'```(.*?)```', r'-{10,}\n(.*?)\n-{10,}', r'^---\n(.*)$']
 
     try:
         for code_pattern in code_pattern_list:
