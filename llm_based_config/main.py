@@ -11,6 +11,7 @@ from kubernetes import client, config, stream
 
 from docx import Document
 import os
+os.environ["OLLAMA_USE_GPU"] = "true"
 import openstack
 import pytz
 import time
@@ -36,17 +37,24 @@ if __name__ == '__main__':
     argparser.add_argument('--llama', action='store_true')
     argparser.add_argument('--code-llm', action='store_true')
     argparser.add_argument('--rag', action='store_true')
-    argparser.add_argument('--skip', action='store_true')
+    argparser.add_argument('--skip', action='store_true', help= "Skip MOPs in 'already_don.py'. Using when terminating unexpected")
+    argparser.add_argument('--test', action='store_true', help='Test only 3 MOPs for testing')
+    argparser.add_argument('--repre-llms', action='store_true', help= 'Using only representative LLMs (except GPT)')
 
     argparser=argparser.parse_args()
     if argparser.OpenStack:
         mop_file_path = '../mop/OpenStack_v3/'
     elif argparser.K8S:
         mop_file_path = '../mop/K8S_v1/'
+    # Let's use intergrated MOPs!
+    mop_file_path = '../mop/Intergrated/'
     system_name='OpenStack' if argparser.OpenStack else 'Kubernetes'
     form='Python' if argparser.Python else 'Ansible'
     prompts_1, prompts_2 = prompt(form, system_name) # Prompots for each language and system.
-    mop_list = [file_name for file_name in os.listdir(mop_file_path) if system_name in file_name ]
+    #mop_list = [file_name for file_name in os.listdir(mop_file_path) if system_name in file_name ]
+    mop_list = [file_name for file_name in os.listdir(mop_file_path)]
+    if argparser.test:
+        mop_list=mop_list[:3]
     os.environ['OPENAI_API_KEY'] = OPENAI_API_KEY
     logging_ = True
     #openai_client = OpenAI(api_key=OPENAI_API_KEY)
@@ -71,26 +79,28 @@ if __name__ == '__main__':
         model_list.extend(["llama3.3", "codellama:70b"])
     if argparser.code_llm:
         model_list.extend(["o3-mini", "codellama:70b", "qwen2.5-coder:32b", "codegemma:7b"])
-    if not argparser.gpt and not argparser.llama:
-        # Trying to use o3-mini, but get errors.. I think langchain version is issue, need to search.
+    if argparser.repre_llms:
+        model_list = ["llama3.3", "qwen2.5:72b", "gemma3:27b", "mistral", "phi4"]
+    elif not argparser.gpt and not argparser.llama and not argparser.code_llm:
         model_list= ["gpt-4o", "o3-mini", "llama3.3", 
-                     "qwen2.5-coder:32b", "qwen2:72b", "deepseek-r1:70b", "gemma2:27b", "gemma3:27b", 
-                     "qwq", "mistral", "phi4"]
+                     "qwen2.5-coder:32b", "deepseek-r1:70b", "gemma3:27b", 
+                     "qwq", "phi4", "mistral"]
     num_ctx_list = {
-        "llama3.3" : 131072,
+        "llama3.3" : 8192,
         "llama3.1:70b" : 8192,
         "qwen2" :8192,
         "qwen2:72b" : 32768,
         "gemma2" : 8192,
         "gemma2:27b" : 8192,
-        "gemma3:27b" : 131072,
-        "deepseek-r1:70b" : 131072,
+        "gemma3:27b" : 8192,
+        "deepseek-r1:70b" : 8192,
+        "qwen2.5:72b" : 32768,
         "codellama:70b" : 2048,
-        "qwen2.5-coder:32b" : 32768,
+        "qwen2.5-coder:32b" : 8192,
         "codegemma:7b" : 8192,
-        "phi4":16384,
-        "mistral":32768,
-        "qwq": 40960
+        "phi4":8192,
+        "mistral":8192,
+        "qwq": 8192
     }
 
     if argparser.rag:
@@ -126,14 +136,14 @@ if __name__ == '__main__':
     #if not floating_server:
     #    print('Make flaoting IP failed')
     #    exit()
-    for mop_file in tqdm(mop_list[:30]):
+    for mop_file in tqdm(mop_list):
         if argparser.skip:    
             if mop_file in already_done:
                 continue
         mop_suc_num=0
-        vnf = mop_file.split('_')[1]
-        lang = mop_file.split('_')[4]
-        action = mop_file.split('_')[3] # confiugration action.
+        vnf = mop_file.split('_')[0]
+        lang = mop_file.split('_')[3]
+        action = mop_file.split('_')[2] # confiugration action.
         if action == 'port':
             additional_action='Block the port except 22 and 80.\n'
         elif action in ['subnet', 'block'] :
@@ -143,9 +153,11 @@ if __name__ == '__main__':
             else:
                 additional_action+=' 10.244.0.0/16.\n'
             if vnf=='nDPI':
-                additional_action+="Please use nDPI to block, following the MOP. Don't use the firewall.\n"
+                additional_action+= "Please use nDPI to block, following the MOP. Don't use the firewall.\n"
         else:
             additional_action=''
+        if vnf == 'Suricata':
+            additional_action+="To install Suricata, you may need to add apt repository of Suricata, so you may need to install 'software-properties-common' first, and then add Suricata repository.\n"
         if vnf not in vm_num:
             vm_num[vnf] = 1
         else:
@@ -275,10 +287,10 @@ if __name__ == '__main__':
                         #print(test_result)
                         #print(f'{_+2} try')
                         start_time = time.time()
-                        if argparser.rag and 'Ansible runner status:' in str(server_or_message):
+                        if argparser.rag and 'Ansible runner status:' in str(server_or_message) or 'but Pod got error: ' in str(server_or_message):
 
                             # ToDo: currently consider only K8S. need to fix to consider OpenStack also.
-                            error_start = str(server_or_message).find("ERROR!")
+                            error_start = str(server_or_message).lower().find("error")
                             if error_start != -1:
                                 error_message = str(server_or_message)[error_start:]
                                 retrieved_texts=RAG.RAG_search(error_message, collection, embed_model)

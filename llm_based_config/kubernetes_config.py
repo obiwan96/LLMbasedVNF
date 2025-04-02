@@ -58,6 +58,14 @@ class OutputCollector:
         if 'stdout' in event_data and event_data['stdout']:
             self.captured_output+=event_data['stdout']
 
+def get_pod_logs(v1, pod_name, namespace= namespace):
+    try:
+        logs = v1.read_namespaced_pod_log(name=pod_name, namespace=namespace)
+        return logs
+    
+    except ApiException as e:
+        print(f"Exception when reading logs in pod {pod_name}: {e}")
+
 def test_creation_ansible(llm_response, vnf, model, vm_num, v1, timeout=300):
     config_file_path = 'K8S_Conf/'
     if not os.path.exists(config_file_path):
@@ -131,23 +139,31 @@ def test_creation_ansible(llm_response, vnf, model, vm_num, v1, timeout=300):
                         if phase == "Running" and ready:
                             # Pod is creating successfully
                             return True, pod_name
+                        elif phase in ["CrashLoopBackOff", "Error"]:
+                            # Pod is in error state.
+                            error_logs = get_pod_logs(v1, pod_name, namespace)
+                            if error_logs:
+                                return False, "Ansible ran, but Pod got error: "+ error_logs
+                            else:
+                                return False, f"Ansible ran, but Pod got into {phase} status."
                     if time.time() - start_time > timeout:
-                        return False, f"Ansible run succeed, but the containers are not ready whitin {timeout} seconds. Test fail."
+                        return False, f"Ansible ran succeed, but the containers are not ready whitin {timeout} seconds. Test fail."
                     time.sleep(5)
             except ApiException as e:
                 if e.status == 404:
-                    return False, f"Ansible run succeeed. But Pod '{pod_name}' doesn't exist in the Kubernetes namespace '{namespace}."
+                    return False, f"Ansible ran succeeed. But Pod '{pod_name}' doesn't exist in the Kubernetes namespace '{namespace}."
                 else:
                     return False, "Error while searching Pod"
             
         else:
             ansible_output=ansi_result_clear(collector.captured_output)
-            return False, 'Ansible run failed. Ansible runner status: '+runner.status + '\n Here are Ansible running results:\n'+ansible_output
+            return False, 'Ansible ran failed. Ansible runner status: '+runner.status + '\n Here are Ansible running results:\n'+ansible_output
 
     except Exception as e:
         #print(e)
         #print('VM creation failed')
         return False, e
+    
 
 def run_config(v1, pod_name, namespace, input, output, exactly=False):
     input = input.split()
@@ -182,13 +198,13 @@ def test_K8S_configuration(pod_name, vnf, model, vm_num, v1, namespace):
     if vnf == 'firewall':
         input_operation , output_operation, exactly = 'sudo iptables -L -v -n', 'DROP', False
     elif vnf == 'Haproxy':
-        input_operation , output_operation, exactly = 'systemctl is-active haproxy', 'active', True
+        input_operation , output_operation, exactly = 'ps -ef | grep haproxy | wc -l', '2', True
     elif vnf == 'nDPI':
         input_operation , output_operation, exactly = 'ps aux', 'ndpiReader', False
     elif vnf == 'ntopng':
         input_operation , output_operation, exactly = 'ps aux', 'ntopng', False
     elif vnf == 'Suricata':
-        input_operation , output_operation, exactly = 'systemctl is-active suricata', 'active', True 
+        input_operation , output_operation, exactly = 'ps -ef | grep suricata | wc -l', '2', True 
     else:
         print('weried...')
     result = run_config(v1, pod_name, namespace, input_operation, output_operation, exactly)

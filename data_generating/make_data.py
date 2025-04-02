@@ -64,10 +64,10 @@ def make_mop(args):
     example_mop_list = os.listdir(example_mop_path)
     example_mop='Here are the example MOP files.\n'
     for example_mop_file_name in example_mop_list:
-        if (args.OpenStack and 'OpenStack' in example_mop_file_name) or (args.K8S and 'K8S' in example_mop_file_name):
-            doc = Document(example_mop_path+example_mop_file_name)
-            for para in doc.paragraphs:
-                example_mop+=para.text+'\n'
+        #if (args.OpenStack and 'OpenStack' in example_mop_file_name) or (args.K8S and 'K8S' in example_mop_file_name):
+        doc = Document(example_mop_path+example_mop_file_name)
+        for para in doc.paragraphs:
+            example_mop+=para.text+'\n'
     total_num_file=0
     langs = []
     if args.en:
@@ -78,6 +78,9 @@ def make_mop(args):
         system_container= ['OpenStack', 'VM']
     elif args.K8S:
         system_container= ['Kubernetes', 'container']
+    else:
+        #Make intergration MOPs.
+        system_container=['OpenStack/Kubernetes', 'VM/container']
     for lang in ['en', 'ko']:
         system, container = system_container
         for function in function_list:
@@ -98,6 +101,8 @@ def make_mop(args):
                             'which can connect to the internal VM, to connect to the newly created VM with SSH '+ \
                             'and operate the shell commands in SSH connection. To do this, enable SSH access through the password. \n' + \
                             "Don't make security groups or keypairs."
+                    elif system=='OpenStack/Kubernetes':
+                        formatted_prompt+= "Don't use GUI in the MOPs. Also, when using OpenStack, indicate user to don't make floating IP and using jump host."
                     response = openai_client.chat.completions.create(
                         model = 'gpt-4o-mini', messages=[
                             {"role" : "system", "content" : f'You are an expert in {system} management.'},
@@ -106,7 +111,7 @@ def make_mop(args):
                     content=response.choices[0].message.content
                     #print(content)
                     #print('-------------------')
-                    mop_file_path = data_path+f"{system}_{function}_setup_{additional_command[0]}_{lang}_withExample_{last_num}.docx"
+                    mop_file_path = data_path+f"{function}_setup_{additional_command[0]}_{lang}_{last_num}.docx"
                     last_num+=1
                     doc = Document()
                     for line in content.split('\n'):

@@ -4,6 +4,8 @@ from bs4.element import NavigableString
 import sqlite3
 import time
 import argparse
+import json
+import os
 from stackapi import StackAPI
 
 def create_table(db_name):
@@ -214,55 +216,84 @@ def html_to_text(html):
 def crawl_stackoverflow(cursor, conn, logging=False):
     SITE = StackAPI('stackoverflow')
     SITE.page_size = 100
-    SITE.max_pages = 20 # need fix? banned from stack oveflow
+    SITE.max_pages = 20 # need modify? banned from stack oveflow
     
+    # State file for saving last question date
+    state_file = "stack_crawl_state.json"
+    if os.path.exists(state_file):
+        with open(state_file, "r") as f:
+            state = json.load(f)
+            last_timestamp = state.get("last_creation_date", 0)
+            max_last_timestamp = last_timestamp
+            crawled_ids = set(state.get("crawled_ids", []))
+    else:
+        last_timestamp = 0
+        max_last_timestamp = 0
+        crawled_ids = set()
     keyword = 'Kubernetes'
     # Todo: Maybe use multiple keywords later
 
-    questions_data = SITE.fetch('search/advanced', q=keyword, filter='withbody')
-    questions = questions_data.get('items', [])
+    page = 1
+    while True:
+        try:
+            questions_data = SITE.fetch('search/advanced', q=keyword, filter='withbody', fromdate=last_timestamp, page=page)
+            if not questions_data['items']:
+                break
+            questions = questions_data.get('items', [])
+            if not questions:
+                print("No more questions.")
+                break
+            for question in questions:
+                q_id = question['question_id']
+                if q_id in crawled_ids or question.get('view_count', 0) < 500:
+                    continue
+                crawled_ids.add(q_id)
+                max_last_timestamp = max(max_last_timestamp, question['creation_date'])
+                q_title = question.get('title', '')
+                q_body = html_to_text(question.get('body', ''))
+
+                answers_data = SITE.fetch('questions/{ids}/answers', ids=[q_id], filter='withbody')
+                answers = answers_data.get('items', [])
+
+                # Filtering the answers. Only remain answers with 2 or more votes
+                filtered_answers = []
+                for answer in answers:
+                    score = answer.get('score', 0)
+                    accepted = answer.get('is_accepted', False)
+                    if score >= 2 or accepted:
+                        filtered_answers.append(answer)
+                if not filtered_answers:
+                    #There is no appropriate answer.
+                    continue
+                total_answer=''
+                for answer in filtered_answers:
+                    total_answer+=html_to_text(answer.get('body', ''))
+                if logging:
+                    print('####################')
+                    print(q_title)
+                    print('--------------------')
+                    print(q_body)
+                    print('Answer:')
+                    print(total_answer)
+                cursor.execute('INSERT INTO documents (title, question, content) VALUES (?, ?, ?)', (q_title, q_body, total_answer))
+                conn.commit()
+                print(f"Crawled: {q_title}")
+            if not questions.get("has_more", False):
+                break
+
+            page += 1
+            time.sleep(1)
+
+        except Exception as e:
+            print(f"Error: {e}")
+            break
+    with open(state_file, "w") as f:
+        json.dump({
+            "last_creation_date": max_last_timestamp,
+            "crawled_ids": list(crawled_ids)
+        }, f)
     
-    docs_num=0 
-    for question in questions:
-        if question.get('view_count', 0) < 500:
-            continue
-
-        q_id = question['question_id']
-        q_title = question.get('title', '')
-        q_body = html_to_text(question.get('body', ''))
-
-        answers_data = SITE.fetch('questions/{ids}/answers', ids=[q_id], filter='withbody')
-        answers = answers_data.get('items', [])
-
-        # Filtering the answers. Only remain answers with 2 or more votes
-        filtered_answers = []
-        for answer in answers:
-            score = answer.get('score', 0)
-            accepted = answer.get('is_accepted', False)
-            if score >= 2 or accepted:
-                filtered_answers.append(answer)
-
-        if not filtered_answers:
-            #There is no appropriate answer.
-            continue
-
-        total_answer=''
-        for answer in filtered_answers:
-            total_answer+=html_to_text(answer.get('body', ''))
-        if logging:
-            print('####################')
-            print(q_title)
-            print('--------------------')
-            print(q_body)
-            print('Answer:')
-            print(total_answer)
-        cursor.execute('INSERT INTO documents (title, question, content) VALUES (?, ?, ?)', (q_title, q_body, total_answer))
-        conn.commit()
-        print(f"Crawled: {q_title}")
-        docs_num+=1
-        time.sleep(2)
-    
-    return docs_num
+    return len(crawled_ids)
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
@@ -305,7 +336,10 @@ if __name__=='__main__':
         print(f'Total {len(visited_urls)} nums of doc. crawled.')
         conn.close()
     if args.stack or args.all:    
-        conn, cursor = create_table('stackoverflow_docs.db')   
+        # for stack overflow, make in several times
+        # conn, cursor = create_table('stackoverflow_docs.db')   
+        conn = sqlite3.connect('stackoverflow_docs.db')
+        cursor = conn.cursor()
         visited_urls = set()
         results = crawl_stackoverflow(cursor, conn, args.logging)
         print(f'Total {results} nums of doc. crawled.')

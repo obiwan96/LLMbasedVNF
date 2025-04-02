@@ -4,6 +4,7 @@ from secret import JUMP_HOST_IP, JUMP_HOST_PWD
 
 pod_name = 'cnf-pod'
 namespace = 'llm-config'
+DNS_IP = '10.99.30.112'
 def read_good_example(method, platform, example_path = 'Good_Example/'):
     good_example = {}
     for file in os.listdir(example_path):
@@ -120,9 +121,10 @@ def prompt(lang, system):
             The variable names are 'pod_name', 'namespace', and 'image_name'.
             Aside from these three, do not use any other variables—please write all other values explicitly.
             I will run the code using my own variables, so do not include a 'vars' section in the code.
-            Also, instead of using the cluster's default DNS settings, manually set the DNS to 10.100.80.140.
+            Also, instead of using the cluster's default DNS settings, manually set the DNS to '{DNS_IP}'.
             For these parts, it would be helpful to refer to the example code.
             You should put 'sleep infinity' command, so that container dosen't killed.
+            Rememeber that, since systemctl cannot be used in containers, even if the MOP instructs to install the VNF using systemctl, an alternative method like running with daemon option, must be found.
             Through this, I want to be able to create the desired Pod by simply providing the values for the three variables — 'pod_name', 'namespace', and 'image_name' — and running the Ansible playbook you provide without making any modifications to the code. 
             My goal is to fully automate the MOP process.
             Please write it as a single code block, not separated into multiple pieces.
