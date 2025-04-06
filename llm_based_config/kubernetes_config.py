@@ -2,10 +2,17 @@ import ansible_runner
 from kubernetes import client, config, stream
 from kubernetes.client.rest import ApiException
 import yaml
+from python_code_modify import wrap_code_in_main
+import multiprocessing
+import io
 import re
+import sys
 from prompt import namespace
 import time
 import os
+from openstack_config import capture_stdout, run_with_timeout
+
+image_name='dokken/ubuntu-20.04'
 
 def list_pods_in_namespace(v1, namespace=namespace):
     pods = v1.list_namespaced_pod(namespace)
@@ -66,7 +73,7 @@ def get_pod_logs(v1, pod_name, namespace= namespace):
     except ApiException as e:
         print(f"Exception when reading logs in pod {pod_name}: {e}")
 
-def test_creation_ansible(llm_response, vnf, model, vm_num, v1, timeout=300):
+def test_creation_ansible_K8S(llm_response, vnf, model, vm_num, v1, timeout=300):
     config_file_path = 'K8S_Conf/'
     if not os.path.exists(config_file_path):
         os.makedirs(config_file_path)
@@ -103,7 +110,7 @@ def test_creation_ansible(llm_response, vnf, model, vm_num, v1, timeout=300):
             restart_daemons(v1)
         runner_thread, runner = ansible_runner.run_async(
             private_data_dir=config_file_path, playbook=file_name,
-            extravars = {'pod_name': pod_name, 'namespace' : namespace, 'image': 'dokken/ubuntu-20.04', 'image_name': 'dokken/ubuntu-20.04'},
+            extravars = {'pod_name': pod_name, 'namespace' : namespace, 'image': image_name, 'image_name': image_name},
             quiet = True, # no stdout.
             event_handler=collector.event_handler
             )
@@ -164,6 +171,93 @@ def test_creation_ansible(llm_response, vnf, model, vm_num, v1, timeout=300):
         #print('VM creation failed')
         return False, e
     
+def test_creation_python_K8S(llm_response, vnf, model, vm_num, trial, v1, timeout=300):
+    config_file_path = 'K8S_Conf/'
+    if not os.path.exists(config_file_path):
+        os.makedirs(config_file_path)
+    code_pattern_list = [r'```python(.*?)```', r'```(.*?)```', r'-{10,}\n(.*?)\n-{10,}', r'^---\n(.*)$']
+
+    try:
+        for code_pattern in code_pattern_list:
+            python_code = re.findall(code_pattern, llm_response, re.DOTALL)
+            if python_code:
+                break
+    except:
+        #print('parsing fail')
+        return False, "I can't see Python code in your response."
+    if not python_code:
+        return False, "I can't see Python code in your response."
+    
+    file_name = f'config_{vnf}_{model.replace(".","")}_{vm_num}_{trial}.py'
+    with open(config_file_path + file_name, 'w') as f:
+        f.write(python_code[0])
+    result = wrap_code_in_main(config_file_path + file_name, config_file_path + file_name)
+    if not result:
+        return False, 'Code parsing failed. Maybe some syntax error or unexpected indentation occured.'
+   
+    try:
+        create_pod = __import__(config_file_path[:-1] + '.' + file_name[:-3],fromlist=['create_pod'])
+    except Exception as e:
+        return False, str(e)+" Please put the code inside the 'create_pod' function."
+    if not hasattr(create_pod, 'create_pod'):
+        #print (config_file_path[:-1] + '.' + file_name[:-3])
+        if 'create_pod(' in python_code[0]:
+            return False, r"I got error while import 'create_pod'. Please check the indentation or grammar."
+        return False, " Please put the code inside the 'create_pod' function."
+
+    try:
+        if not check_pod_errors(v1, 'kube-system') or not check_pod_errors(v1, 'kube-flannel'):
+            restart_daemons(v1)
+        start_time = time.time()
+        stdout_capture = io.StringIO()
+        sys.stdout = stdout_capture
+        pod_name= vnf.lower()+'-pod'
+        pod_cration_result = create_pod.create_pod(pod_name, namespace, image_name)
+        sys.stdout = sys.__stdout__
+        stdout_contents = stdout_capture.getvalue()
+        if pod_cration_result:
+            # The pod_creation function ran succeed.
+            # Wait for creation success for Pod.    
+            try:            
+                while True:
+                    try:
+                        pod = v1.read_namespaced_pod(name=pod_name, namespace=namespace)
+                    except client.exceptions.ApiException as e:
+                        pod = None
+                    if pod:
+                        phase = pod.status.phase                        
+                        ready = True
+                        
+                        if phase == "Running" and ready:
+                            # Pod is creating successfully
+                            return True, pod_name
+                        elif phase in ["CrashLoopBackOff", "Error"]:
+                            # Pod is in error state.
+                            error_logs = get_pod_logs(v1, pod_name, namespace)
+                            if error_logs:
+                                return False, "'create_pod' ran, but Pod got error: "+ error_logs
+                            else:
+                                return False, f"'create_pod' ran, but Pod got into {phase} status."
+                    if time.time() - start_time > timeout:
+                        return False, f"'create_pod' ran succeed, but the containers are not ready whitin {timeout} seconds. Test fail."
+                    time.sleep(5)
+            except ApiException as e:
+                if e.status == 404:
+                    return False, f"'create_pod' ran succeeed. But Pod '{pod_name}' doesn't exist in the Kubernetes namespace '{namespace}."
+                else:
+                    return False, "Error while searching Pod"
+        else:
+            return False, "'create_pod' ran failed. Pod creation failed."
+    except Exception as e:
+        sys.stdout = sys.__stdout__
+        stdout_contents = stdout_capture.getvalue()
+        stdout_capture.close()        
+        if stdout_contents:      
+            return False, stdout_contents+str(e)
+        else:
+            return False, e
+    #except Exception as e:
+    #    return False, str(e)+" Please put the code inside the 'create_pod' function."
 
 def run_config(v1, pod_name, namespace, input, output, exactly=False):
     input = input.split()

@@ -80,11 +80,11 @@ if __name__ == '__main__':
     if argparser.code_llm:
         model_list.extend(["o3-mini", "codellama:70b", "qwen2.5-coder:32b", "codegemma:7b"])
     if argparser.repre_llms:
-        model_list = ["llama3.3", "qwen2.5:72b", "gemma3:27b", "mistral", "phi4"]
+        model_list = ["llama3.3", "qwen2.5-coder:32b", "gemma3:27b", "mistral", "phi4"]
     elif not argparser.gpt and not argparser.llama and not argparser.code_llm:
-        model_list= ["gpt-4o", "o3-mini", "llama3.3", 
-                     "qwen2.5-coder:32b", "deepseek-r1:70b", "gemma3:27b", 
-                     "qwq", "phi4", "mistral"]
+        model_list= [# "gpt-4o", "o3-mini",  #The money ran out too fast, so left it out for a while
+                     "llama3.3", "qwen2.5-coder:32b", "deepseek-r1:70b",
+                      "gemma3:27b", "qwq", "phi4", "mistral"]
     num_ctx_list = {
         "llama3.3" : 8192,
         "llama3.1:70b" : 8192,
@@ -199,9 +199,12 @@ if __name__ == '__main__':
                         f.write(f" --- Trial: {_+1}\n")
                         f.write(llm_response+'\n\n')
                 if form=='Python':
-                    test_result, server_or_message = test_creation_python(llm_response, vnf, model, vm_num[vnf])
+                    if system_name=='OpenStack':
+                        test_result, server_or_message = test_creation_python_OpenStack(llm_response, vnf, model, vm_num[vnf])
+                    elif system_name=='Kubernetes':
+                        test_result, server_or_message = test_creation_python_K8S(llm_response, vnf, model, vm_num[vnf], _, v1, namespace)
                 else:
-                    test_result, server_or_message = test_creation_ansible(llm_response, vnf, model, vm_num[vnf], v1, 600)
+                    test_result, server_or_message = test_creation_ansible_K8S(llm_response, vnf, model, vm_num[vnf], v1, 600)
                 spend_time[1] = time.time()-start_time
                 if test_result == True:
                     if system_name=='OpenStack':
@@ -302,7 +305,14 @@ if __name__ == '__main__':
                                 with open(logging_file, 'a') as f:
                                     f.write ('RAG results:\n')
                                     f.write(retrieved_texts+'\n')
-                        llm_response=chat.invoke('When I run your code, I got this error message, and failed to create VM. Please fix it.\n'+str(server_or_message))['response']
+                        if form=='Python' and 'has no attribute ' in str(server_or_message):
+                            func_name = str(server_or_message).split("'")[3]
+                            #print(func_name)
+                            llm_response=chat.invoke(f"Your code doesn't have '{func_name}' function. Please put the code inside it. Don't use the other function name.")['response']
+                        elif form=='Python' and 'positional arguments but 3 were given' in str(server_or_message):
+                            llm_response=chat.invoke(f"'create_pod' function should take 'pod_name', 'namespace', and 'image_name' as input.")['response']
+                        else:
+                            llm_response=chat.invoke('When I run your code, I got this error message, and failed to create VM. Please fix it.\n'+str(server_or_message))['response']
             # Delete all VMs created after the target time
             if system_name=='OpenStack':
                 delete_vms_after(conn, target_datetime)

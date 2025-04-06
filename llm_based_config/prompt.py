@@ -2,7 +2,7 @@ import os
 import sys
 from secret import JUMP_HOST_IP, JUMP_HOST_PWD
 
-pod_name = 'cnf-pod'
+#pod_name = 'cnf-pod'
 namespace = 'llm-config'
 DNS_IP = '10.99.30.112'
 def read_good_example(method, platform, example_path = 'Good_Example/'):
@@ -73,29 +73,24 @@ def prompt(lang, system):
         # Kubernetes Python code part is just copy version of OpenStack. need change.
         elif system == 'Kubernetes':
             prompts_1 = '''You are an Kubernetes cloud expert. 
-            Here are 'example' codes to create and configurate a CNF in Kubernetes using Python with Kubernetes library. \n'''
+            Please write Python code that creates a Kubernetes Pod and installs a VNF inside it, taking the following points into consideration.
+            Here are 'example' codes to create and configurate a VNF in Kubernetes using Python with Kubernetes library. \n'''
             good_example_str + \
-            f'''\nPlease rememeber, these are example code, so you have to just refer to them. For detailed CNF setup methods and parameters, follow the following description, not the example code.
-            The Kubernetes configuration file path is '/home/dpnm/.kube/config'.
-            I'll give you a Method Of Procedure (MOP),"
-            which describes the process of installing a Pod in Kubernetes and installing and configure the CNF on the Pod. 
+            f'''\nPlease rememeber, these are example code, so you have to just refer to them. For detailed VNF setup methods and parameters, follow the following description, not the example code.
+            The Kubernetes configuration file is in it's default path,  '/home/dpnm/.kube/config'.
+            I'll give you a Method Of Procedure (MOP), which describes the process of installing a Pod in Kubernetes and installing and configure the VNF on the Pod. 
             With reference to this, please write the Python code that automates the process in MOP. 
-            Put the code to create Pod in the function name 'create_Pod' and return the 'server object' if the Pod is created successfully, 
-            and return False if it fails. And make the part in charge of CNF configuration as a function of 'cofig_Pod'.
-            'config_Pod' takes the 'server object' as a input and returns True if the configuration is successful, and False if it fails. 
-            In this way, I hope that the same process as MOP will be performed by continuously executing the 'create_Pod' function and 'config_Pod'.'''
+            Make sure to place the entire logic for creating the Pod and configuring the VNF inside a function named 'create_pod'.
+            The 'create_pod' function must take 'pod_name', 'namespace', and 'image_name' as input parameters, and must return True if the Pod is created successfully, or False if it fails.
+            Do not split the logic across multiple functions or files. Everything should be contained within 'create_pod'.
+            In this way, I hope that the same process as MOP will be performed by executing the 'create_pod' function.'''
         
-            prompts_2= f'''Don't seperate two fucntions, put in same code block, and don't put usage or example in the block.
-            Use '{image_name}' image, '{flavor_name}' flavor, {network_name} network.
-            Don't make key pair in Kubernetes, don't use stdin to get any kind of password.
-            If you need access to the inside of the Pod for internal Pod settings, instead of setting floating IP on the created Pod,
-            use the Jump Host, which can connect to the internal Pod, 
-            to connect to the newly created Pod with SSH. Here is the Jump Host information.
-            You will need to enable SSH connection in newly created Pod through password to enable connection from Jump Host,
-            and you will need to set an ID and password to 'ubuntu'. You should get an IP address in 'server' object and use it to connect in Pod.
-            Jump Host IP: {JUMP_HOST_IP}, Username: ubuntu, Password: {JUMP_HOST_PWD}
-            When if you need to modify some files in Pod, Paramiko is not an interactive session, so you should not use vim or nano. I recommend to use echo, but you can find other way.
-            Every time you access the Pod with Paramiko, it connect to '/home' directory, so 'cd' does not work. I recommend you to use the absolute path.
+            prompts_2= f'''Don't put usage or example in the code block.
+            Also, instead of using the cluster's default DNS settings, manually set the DNS to '{DNS_IP}'.
+            You should put 'sleep infinity' command, so that container dosen't killed.
+            Rememeber that, since systemctl cannot be used in containers, even if the MOP instructs to install the VNF using systemctl, an alternative method like running with daemon option, must be found.
+            Don't use stdin to get any kind of password.
+            Don't make 'host_name' option as True in Pod creation step.
             Here is the MOP: '''
 
     elif lang == 'Ansible':
@@ -124,8 +119,9 @@ def prompt(lang, system):
             Also, instead of using the cluster's default DNS settings, manually set the DNS to '{DNS_IP}'.
             For these parts, it would be helpful to refer to the example code.
             You should put 'sleep infinity' command, so that container dosen't killed.
-            Rememeber that, since systemctl cannot be used in containers, even if the MOP instructs to install the VNF using systemctl, an alternative method like running with daemon option, must be found.
-            Through this, I want to be able to create the desired Pod by simply providing the values for the three variables — 'pod_name', 'namespace', and 'image_name' — and running the Ansible playbook you provide without making any modifications to the code. 
+            Don't make 'host_name' option as True.
+            Rememeber that, since systemctl cannot be used in containers, even if the MOP instructs to install the VNF using systemctl, an alternative method like running with daemon option, must be found.'''+ \
+            '''Through this, I want to be able to create the desired Pod by simply providing the values for the three variables — 'pod_name', 'namespace', and 'image_name' — and running the Ansible playbook you provide without making any modifications to the code. 
             My goal is to fully automate the MOP process.
             Please write it as a single code block, not separated into multiple pieces.
             Here is the MOP: '''

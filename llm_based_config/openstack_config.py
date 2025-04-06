@@ -38,7 +38,7 @@ def run_with_timeout(func, args=(), timeout = 5):
             return False, f"Timeout reached. Function did not finish within {timeout} minutes."
 
         
-def test_creation_python(llm_response, vnf, model, vm_num):
+def test_creation_python_OpenStack(llm_response, vnf, model, vm_num):
     config_file_path = 'OpenStack_Conf/'
     code_pattern = r'```python(.*?)```'
     code_pattern_second = r'```(.*?)```'
@@ -48,9 +48,9 @@ def test_creation_python(llm_response, vnf, model, vm_num):
             python_code = re.findall(code_pattern_second, llm_response, re.DOTALL)
     except:
         #print('parsing fail')
-        return False, "I can't see YAML code in your response."
+        return False, "I can't see Python code in your response."
     if not python_code:
-        return False, "I can't see YAML code in your response."
+        return False, "I can't see Python code in your response."
     file_name = f'config_{vnf}_{model.replace(".","")}_{vm_num}.py'
     with open(config_file_path + file_name, 'w') as f:
         f.write(python_code[0])
@@ -78,7 +78,7 @@ def test_creation_python(llm_response, vnf, model, vm_num):
                     stdout_contents = stdout_capture.getvalue()
                     stdout_capture.close()        
                     if stdout_contents:      
-                        return False, stdout_contents+e
+                        return False, stdout_contents+str(e)
                     else:
                         return False, e
         except Exception as e:

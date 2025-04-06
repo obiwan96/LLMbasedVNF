@@ -1,6 +1,18 @@
 import ast
 import astor  # Import astor to convert AST back to source code
 import os
+from astor.code_gen import SourceGenerator
+
+_original_visit_Str = SourceGenerator.visit_Str
+def custom_visit_Str(self, node):
+    s = node.s
+    # if '\n' in code, change it to raw string to keep in code
+    if "\\n" in s:
+        escaped = s.replace('"', '\\"')
+        self.write('r"' + escaped + '"')
+    else:
+        _original_visit_Str(self, node)
+
 #################################################
 # modify python code.                           #
 # put all 'top-level' into '__main__'.          #
@@ -21,6 +33,7 @@ def wrap_code_in_main(file_path, output_file_path=None):
     Read the given Python file, wrap top-level code in the `if __name__ == "__main__":` block,
     and write the modified code to a new file (or print it).
     """
+    #SourceGenerator.visit_Str = custom_visit_Str
     # Read the Python code from the file
     with open(file_path, 'r') as f:
         code = f.read()
