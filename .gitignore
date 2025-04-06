@@ -1,7 +1,9 @@
 llm_based_config/clouds.yaml
 llm_based_config/OpenStack_Conf
+llm_based_config/K8S_Conf
 */secret.py
 */log.txt
+conda.yaml
 log_vnf.txt
 */test.py
 test*
@@ -14,7 +16,9 @@ Bad_Example/
 __pycache__/
 *.py[cod]
 *$py.class
-
+*.json
+*.db
+tmp/
 data/
 secret.py
 
