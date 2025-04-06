@@ -3,14 +3,13 @@ from kubernetes import client, config, stream
 from kubernetes.client.rest import ApiException
 import yaml
 from python_code_modify import wrap_code_in_main
-import multiprocessing
 import io
 import re
 import sys
 from prompt import namespace
 import time
 import os
-from openstack_config import capture_stdout, run_with_timeout
+import subprocess
 
 image_name='dokken/ubuntu-20.04'
 
@@ -226,9 +225,9 @@ def test_creation_python_K8S(llm_response, vnf, model, vm_num, trial, v1, timeou
                         pod = None
                     if pod:
                         phase = pod.status.phase                        
-                        ready = True
+                        #ready = True
                         
-                        if phase == "Running" and ready:
+                        if phase == "Running":
                             # Pod is creating successfully
                             return True, pod_name
                         elif phase in ["CrashLoopBackOff", "Error"]:
@@ -288,7 +287,53 @@ def run_config(v1, pod_name, namespace, input, output, exactly=False):
             return True
     return response
 
-def test_K8S_configuration(pod_name, vnf, model, vm_num, v1, namespace):
+def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
+    # I can't find how to check all commands run well.
+    # Just waiting is seems better. 150 is enough?
+    start_time = time.time()
+    while True:
+        pod = v1.read_namespaced_pod(name=pod_name, namespace=namespace)
+        for container in pod.status.container_statuses:
+            container_name = container.name
+            container_state = container.last_state
+
+            if container_state.terminated:
+                exit_code = container_state.terminated.exit_code
+                #print(f"Container '{container_name}' exit code: {exit_code}")
+
+                # Check if exit code is 0 (normal termination)
+                if exit_code == 0:
+                    # Container command end with normal state
+                    return f"Container '{container_name}' exit. But it shoud not exit. Please add 'sleep infinity' command."
+                else:
+                    return f"Container '{container_name}' failed with exit code {exit_code}."
+            else:
+                pass
+        logs = get_pod_logs(v1, pod_name, namespace)
+        if 'err' in logs.lower():
+            return "Error occurs while configurating. Logs:\n"+ logs
+        if time.time() - start_time > wait_time:
+            # error or exit did not occur while wait_time
+            break
+        time.sleep(5)
+
+    # Let's check if 'sleep infinity' working in container.
+    try:
+        command = [
+            "kubectl", "exec", pod_name, "-n", namespace,
+            "--", "ps", "aux" 
+        ]        
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)        
+        if result.returncode == 0:
+            processes = result.stdout            
+            if not "sleep infinity" in processes:
+                return "sleep infinity is NOT running. Please add 'sleep infinity' command."
+        else:
+            return "Error while fetching Pod processes: " + str(result.stderr)
+
+    except Exception as e:
+        return "Error while fetching Pod processes: " + str(e)
+
     if vnf == 'firewall':
         input_operation , output_operation, exactly = 'sudo iptables -L -v -n', 'DROP', False
     elif vnf == 'Haproxy':

@@ -77,20 +77,28 @@ def prompt(lang, system):
             Here are 'example' codes to create and configurate a VNF in Kubernetes using Python with Kubernetes library. \n'''
             good_example_str + \
             f'''\nPlease rememeber, these are example code, so you have to just refer to them. For detailed VNF setup methods and parameters, follow the following description, not the example code.
-            The Kubernetes configuration file is in it's default path,  '/home/dpnm/.kube/config'.
-            I'll give you a Method Of Procedure (MOP), which describes the process of installing a Pod in Kubernetes and installing and configure the VNF on the Pod. 
-            With reference to this, please write the Python code that automates the process in MOP. 
-            Make sure to place the entire logic for creating the Pod and configuring the VNF inside a function named 'create_pod'.
-            The 'create_pod' function must take 'pod_name', 'namespace', and 'image_name' as input parameters, and must return True if the Pod is created successfully, or False if it fails.
-            Do not split the logic across multiple functions or files. Everything should be contained within 'create_pod'.
-            In this way, I hope that the same process as MOP will be performed by executing the 'create_pod' function.'''
+            
+            I will provide you with a Method Of Procedure (MOP) that describes the process of installing a Pod in Kubernetes and configuring a VNF on that Pod. 
+            Based on this MOP, you must write a single, self-contained Python function with the following strict requirements:
+	        1.	The entire logic for creating the Pod and configuring the VNF must be contained within one function only; do not split the logic into multiple functions or files.
+	        2.	The function must be named 'create_pod'.
+	        3.	The create_pod function must accept exactly three input parameters: 'pod_name', 'namespace', and 'image_name'.
+	        4.	The function must return True if the Pod is created and the VNF is configured successfully; otherwise, it must return False.
+	        5.	Do not include any additional parameters or helper functions; everything must be implemented inside the create_pod function.
+            6.  The Kubernetes configuration file is in it's default path, '/home/dpnm/.kube/config'. So to load the configuration, use 'load_kube_config' instead of 'load_incluster_config'.
+            7.  Don't put usage or example in the code block.
+            8.  Instead of using the cluster's default DNS settings, manually set the DNS to '{DNS_IP}'.
+            9.  Put 'sleep infinity' command, so that container dosen't killed.
+            10. Since systemctl cannot be used in containers, even if the MOP instructs to install the VNF using systemctl, an alternative method like running with daemon option, must be found.
+            11. Don't use stdin to get any kind of password.
+            12. Don't make 'host_name' option as True in Pod creation step.
+            13. Configurate the VNF in one container.
+
+            Please ensure that you follow these instructions exactly and do not deviate from the specified function name, parameter list, or return value.'''
         
-            prompts_2= f'''Don't put usage or example in the code block.
-            Also, instead of using the cluster's default DNS settings, manually set the DNS to '{DNS_IP}'.
-            You should put 'sleep infinity' command, so that container dosen't killed.
-            Rememeber that, since systemctl cannot be used in containers, even if the MOP instructs to install the VNF using systemctl, an alternative method like running with daemon option, must be found.
-            Don't use stdin to get any kind of password.
-            Don't make 'host_name' option as True in Pod creation step.
+            prompts_2= f'''
+            Now, write the Python code that automates the process described in the MOP, following the above requirements.
+
             Here is the MOP: '''
 
     elif lang == 'Ansible':

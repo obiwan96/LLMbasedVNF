@@ -238,7 +238,7 @@ if __name__ == '__main__':
                     if system_name=='OpenStack':
                         second_test_result = test_openstack_configuration(server_or_message, vnf, model, vm_num[vnf], conn, None)
                     if system_name=='Kubernetes':
-                        second_test_result = test_K8S_configuration(server_or_message, vnf, model, vm_num[vnf], v1, namespace)
+                        second_test_result = test_K8S_configuration(server_or_message, vnf, v1, namespace)
                     spend_time[2] = time.time()-start_time
                     if system_name=='OpenStack':
                         conn.delete_server(server_or_message.id)
