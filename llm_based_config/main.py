@@ -36,10 +36,12 @@ if __name__ == '__main__':
     argparser.add_argument('--gpt', action='store_true')
     argparser.add_argument('--llama', action='store_true')
     argparser.add_argument('--code-llm', action='store_true')
-    argparser.add_argument('--rag', action='store_true')
+    argparser.add_argument('--RAG', action='store_true')
     argparser.add_argument('--skip', action='store_true', help= "Skip MOPs in 'already_don.py'. Using when terminating unexpected")
     argparser.add_argument('--test', action='store_true', help='Test only 3 MOPs for testing')
     argparser.add_argument('--repre-llms', action='store_true', help= 'Using only representative LLMs (except GPT)')
+    argparser.add_argument('--no-log', action='store_true', help= 'Do not log the result')
+    argparser.add_argument('--max-limit', help= 'Max limit of MOPs to test', type=int, default=3)
 
     argparser=argparser.parse_args()
     if argparser.OpenStack:
@@ -50,16 +52,16 @@ if __name__ == '__main__':
     mop_file_path = '../mop/Intergrated/'
     system_name='OpenStack' if argparser.OpenStack else 'Kubernetes'
     form='Python' if argparser.Python else 'Ansible'
-    prompts_1, prompts_2 = prompt(form, system_name) # Prompots for each language and system.
+    prompts_1, prompts_2, example_code = prompt(form, system_name) # Prompots for each language and system.
     #mop_list = [file_name for file_name in os.listdir(mop_file_path) if system_name in file_name ]
     mop_list = [file_name for file_name in os.listdir(mop_file_path)]
     if argparser.test:
         mop_list=mop_list[:3]
     os.environ['OPENAI_API_KEY'] = OPENAI_API_KEY
-    logging_ = True
+    logging_ = not argparser.no_log
     #openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-    maximum_tiral = 3 # Two more chance.
+    maximum_tiral = argparser.max_limit # 3 is default. give 2 more chance
     if argparser.OpenStack:
         cloud_name = 'postech_cloud'
         conn = openstack.connect(cloud=cloud_name)
@@ -86,24 +88,24 @@ if __name__ == '__main__':
                      "llama3.3", "qwen2.5-coder:32b", "deepseek-r1:70b",
                       "gemma3:27b", "qwq", "phi4", "mistral"]
     num_ctx_list = {
-        "llama3.3" : 8192,
+        "llama3.3" : 10000, #131072
         "llama3.1:70b" : 8192,
         "qwen2" :8192,
         "qwen2:72b" : 32768,
         "gemma2" : 8192,
         "gemma2:27b" : 8192,
-        "gemma3:27b" : 8192,
-        "deepseek-r1:70b" : 8192,
+        "gemma3:27b" : 10000, #131072
+        "deepseek-r1:70b" : 10000, #131072
         "qwen2.5:72b" : 32768,
         "codellama:70b" : 2048,
-        "qwen2.5-coder:32b" : 8192,
+        "qwen2.5-coder:32b" : 10000, #32768
         "codegemma:7b" : 8192,
-        "phi4":8192,
-        "mistral":8192,
-        "qwq": 8192
+        "phi4":10000, #16384
+        "mistral":10000, #32768
+        "qwq": 10000 #40960
     }
 
-    if argparser.rag:
+    if argparser.RAG:
         db_list=['RAG/stackoverflow_docs.db']
         if argparser.OpenStack:
             db_list.append('RAG/openstack_docs.db')
@@ -188,7 +190,7 @@ if __name__ == '__main__':
                 llm = Ollama(model=model, num_ctx=num_ctx_list[model])
             chat = ConversationChain(llm=llm, memory = ConversationBufferMemory())
             #llm_response=llm.invoke(prompts+mop)
-            llm_response=chat.invoke(prompts_1+additional_action+prompts_2+mop)['response']
+            llm_response=chat.invoke(prompts_1+additional_action+prompts_2+ mop + example_code)['response']
             #print(llm_response)
             already_success = False
             for _ in range(maximum_tiral):
@@ -266,7 +268,7 @@ if __name__ == '__main__':
                                 f.write(str(second_test_result)+'\n')
                         if _ < maximum_tiral-1:
                             start_time = time.time()
-                            if argparser.rag and False:
+                            if argparser.RAG and False:
                                 # VNF configuration related docs are not crawled yet. Only OpenStack and K8S.
                                 retrieved_texts=RAG.RAG_search(second_test_result, collection, embed_model)
                                 second_test_result= str(second_test_result) + '\n And here is a related document. Please refer to it.' + retrieved_texts
@@ -276,10 +278,10 @@ if __name__ == '__main__':
                                         f.write(retrieved_texts+'\n')
                             if system_name=='OpenStack':
                                 llm_response=chat.invoke('When I run your code, I can successfully create VM, '+ \
-                                    'but VNF configuration is failed. I got this error message. Please fix it.\n'+str(second_test_result))['response']
+                                    'but VNF configuration is failed. I got this error message. Please correct the code and return the updated version.\n'+str(second_test_result))['response']
                             if system_name == 'Kubernetes':
                                 llm_response=chat.invoke('When I run your code, I can successfully create Pod, '+ \
-                                    'but VNF is not installed correctly as intended. Please fix it by refering MOP again.\n'+str(second_test_result))['response']
+                                    'but VNF is not installed correctly as intended. Please correct the code and return the updated version by refering MOP again.\n'+str(second_test_result))['response']
                 else:
                     # VM Creation failed
                     if logging_:
@@ -290,7 +292,7 @@ if __name__ == '__main__':
                         #print(test_result)
                         #print(f'{_+2} try')
                         start_time = time.time()
-                        if argparser.rag and 'Ansible runner status:' in str(server_or_message) or 'but Pod got error: ' in str(server_or_message):
+                        if argparser.RAG and 'Ansible runner status:' in str(server_or_message) or 'but Pod got error: ' in str(server_or_message):
 
                             # ToDo: currently consider only K8S. need to fix to consider OpenStack also.
                             error_start = str(server_or_message).lower().find("error")
@@ -308,16 +310,16 @@ if __name__ == '__main__':
                         if form=='Python' and 'has no attribute ' in str(server_or_message):
                             func_name = str(server_or_message).split("'")[3]
                             #print(func_name)
-                            llm_response=chat.invoke(f"Your code doesn't have '{func_name}' function. Please put the code inside it. Don't use the other function name.")['response']
+                            llm_response=chat.invoke(f"Your code doesn't have '{func_name}' function. Please put the code inside it. Also, it should take 'pod_name', 'namespace', and 'image_name' as input and return True if configuration succeed. Don't use the other function name.")['response']
                         elif form=='Python' and 'positional arguments but 3 were given' in str(server_or_message):
-                            llm_response=chat.invoke(f"'create_pod' function should take 'pod_name', 'namespace', and 'image_name' as input.")['response']
+                            llm_response=chat.invoke(f"'create_pod' function should take 'pod_name', 'namespace', and 'image_name' as input and return True if configuration succeed.")['response']
                         else:
-                            llm_response=chat.invoke('When I run your code, I got this error message, and failed to create VM. Please fix it.\n'+str(server_or_message))['response']
-            # Delete all VMs created after the target time
-            if system_name=='OpenStack':
-                delete_vms_after(conn, target_datetime)
-            elif system_name=='Kubernetes':
-                delete_all_pods(v1, apps_v1)
+                            llm_response=chat.invoke('When I run your code, I got this error message, and failed to create VM. Please correct the code and return the updated version.\n'+str(server_or_message))['response']
+                if system_name=='OpenStack':
+                    # Delete all VMs created after the target time
+                    delete_vms_after(conn, target_datetime)
+                elif system_name=='Kubernetes':
+                    delete_all_pods(v1, apps_v1)
         # change next print operations to write in the logging_file
         if logging_:
             with open(logging_file, 'a') as f:

@@ -72,6 +72,16 @@ def get_pod_logs(v1, pod_name, namespace= namespace):
     except ApiException as e:
         print(f"Exception when reading logs in pod {pod_name}: {e}")
 
+def check_log_error(logs):
+    error_words=['error ', 'error:', 'error!']
+    for error_word in error_words:
+        if error_word in logs.lower():
+            return logs.lower().find(error_word)
+        
+    if 'ERR' in logs:
+        return logs.find('ERR')
+    return False
+
 def test_creation_ansible_K8S(llm_response, vnf, model, vm_num, v1, timeout=300):
     config_file_path = 'K8S_Conf/'
     if not os.path.exists(config_file_path):
@@ -170,7 +180,7 @@ def test_creation_ansible_K8S(llm_response, vnf, model, vm_num, v1, timeout=300)
         #print('VM creation failed')
         return False, e
     
-def test_creation_python_K8S(llm_response, vnf, model, vm_num, trial, v1, timeout=300):
+def test_creation_python_K8S(llm_response, vnf, model, vm_num, trial, v1, namespace, timeout=300):
     config_file_path = 'K8S_Conf/'
     if not os.path.exists(config_file_path):
         os.makedirs(config_file_path)
@@ -211,10 +221,10 @@ def test_creation_python_K8S(llm_response, vnf, model, vm_num, trial, v1, timeou
         stdout_capture = io.StringIO()
         sys.stdout = stdout_capture
         pod_name= vnf.lower()+'-pod'
-        pod_cration_result = create_pod.create_pod(pod_name, namespace, image_name)
+        pod_creation_result = create_pod.create_pod(pod_name, namespace, image_name)
         sys.stdout = sys.__stdout__
         stdout_contents = stdout_capture.getvalue()
-        if pod_cration_result:
+        if pod_creation_result:
             # The pod_creation function ran succeed.
             # Wait for creation success for Pod.    
             try:            
@@ -238,7 +248,7 @@ def test_creation_python_K8S(llm_response, vnf, model, vm_num, trial, v1, timeou
                             else:
                                 return False, f"'create_pod' ran, but Pod got into {phase} status."
                     if time.time() - start_time > timeout:
-                        return False, f"'create_pod' ran succeed, but the containers are not ready whitin {timeout} seconds. Test fail."
+                        return False, f"'create_pod' ran succeed, but the containers are not ready whitin {timeout} seconds. Test fail. Please check again you use right image_name, namespace variables for pod."
                     time.sleep(5)
             except ApiException as e:
                 if e.status == 404:
@@ -246,7 +256,7 @@ def test_creation_python_K8S(llm_response, vnf, model, vm_num, trial, v1, timeou
                 else:
                     return False, "Error while searching Pod"
         else:
-            return False, "'create_pod' ran failed. Pod creation failed."
+            return False, "'create_pod' didn't return True. Here is the output. \n"+stdout_contents
     except Exception as e:
         sys.stdout = sys.__stdout__
         stdout_contents = stdout_capture.getvalue()
@@ -310,8 +320,9 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
             else:
                 pass
         logs = get_pod_logs(v1, pod_name, namespace)
-        if 'err' in logs.lower():
-            return "Error occurs while configurating. Logs:\n"+ logs
+        error_index = check_log_error(logs)
+        if error_index:
+            return "Error occurs while configuring VNF. Logs:\n"+ logs [error_index:]
         if time.time() - start_time > wait_time:
             # error or exit did not occur while wait_time
             break
@@ -329,10 +340,10 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
             if not "sleep infinity" in processes:
                 return "sleep infinity is NOT running. Please add 'sleep infinity' command."
         else:
-            return "Error while fetching Pod processes: " + str(result.stderr)
+            return "Error occur while fetching Pod processes: " + str(result.stderr)
 
     except Exception as e:
-        return "Error while fetching Pod processes: " + str(e)
+        return "Error occur while fetching Pod processes: " + str(e)
 
     if vnf == 'firewall':
         input_operation , output_operation, exactly = 'sudo iptables -L -v -n', 'DROP', False
