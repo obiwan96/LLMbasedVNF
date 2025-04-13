@@ -86,7 +86,7 @@ def prompt(lang, system):
             7.  The Kubernetes configuration file is in it's default path, '/home/dpnm/.kube/config'. So to load the configuration, use 'load_kube_config' instead of 'load_incluster_config'.
             8.  Don't put usage or example in the code block.
             9.  Instead of using the cluster's default DNS settings, manually set the DNS to '{DNS_IP}'.
-            10.  Put 'sleep infinity' command, so that container dosen't killed.
+            10. Put 'sleep infinity' command, so that container dosen't killed.
             12. Since systemctl cannot be used in containers, even if the MOP instructs to install the VNF using systemctl, an alternative method like running with daemon option, must be found.
             12. Don't use stdin to get any kind of password.
             13. Don't make 'host_name' option as True in Pod creation step.

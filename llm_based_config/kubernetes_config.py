@@ -73,7 +73,10 @@ def get_pod_logs(v1, pod_name, namespace= namespace):
         print(f"Exception when reading logs in pod {pod_name}: {e}")
 
 def check_log_error(logs):
+    if not logs:
+        return False
     error_words=['error ', 'error:', 'error!']
+    # This is because of some apt library include 'error' in the name, ex) liberror-perl
     for error_word in error_words:
         if error_word in logs.lower():
             return logs.lower().find(error_word)
@@ -81,6 +84,14 @@ def check_log_error(logs):
     if 'ERR' in logs:
         return logs.find('ERR')
     return False
+
+def return_error_logs(logs):
+    logs = logs.split('\n')
+    error_logs=[]
+    for log in logs:
+        if 'error' in log.lower() or 'ERR' in log:
+            error_logs.append(log)
+    return error_logs
 
 def test_creation_ansible_K8S(llm_response, vnf, model, vm_num, v1, timeout=300):
     config_file_path = 'K8S_Conf/'
@@ -198,6 +209,8 @@ def test_creation_python_K8S(llm_response, vnf, model, vm_num, trial, v1, namesp
         return False, "I can't see Python code in your response."
     
     file_name = f'config_{vnf}_{model.replace(".","")}_{vm_num}_{trial}.py'
+    if 'while True' in python_code[0]:
+        return False, "Your code include infinite loop. Please remove it."
     with open(config_file_path + file_name, 'w') as f:
         f.write(python_code[0])
     result = wrap_code_in_main(config_file_path + file_name, config_file_path + file_name)
@@ -302,7 +315,10 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
     # Just waiting is seems better. 150 is enough?
     start_time = time.time()
     while True:
-        pod = v1.read_namespaced_pod(name=pod_name, namespace=namespace)
+        try:
+            pod = v1.read_namespaced_pod(name=pod_name, namespace=namespace)
+        except:
+            return "Pod named with pod_name doesn't exist. Please use pod_name variable directly."
         for container in pod.status.container_statuses:
             container_name = container.name
             container_state = container.last_state
