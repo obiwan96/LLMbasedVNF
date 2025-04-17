@@ -102,30 +102,25 @@ def prompt(lang, system):
         # Let's do Kubernetes Ansible first!
         elif system== 'Kubernetes':
             good_example_str = "Here are example YAML configuration snippets for creating and configuring a CNF in Kubernetes using Ansible. \n" +\
-                good_example_str + "\nNow, write the Python code that automates the process described in the MOP, following the above requirements."
+                good_example_str + "\nNow, write the YAML code that automates the process described in the MOP, following the above requirements."
             prompts_1 = '''You are a Kubernetes cloud expert. 
             I will provide you with a Method of Procedure (MOP), which outlines the steps for deploying a Pod in Kubernetes and installing and configuring the CNF specified in the MOP on that Pod.
-            Based on this, please write the corresponding Ansible YAML code that automates the installation and configuration process described in the MOP.\n'''+ \
-            f'''\nPlease rememeber, these are example code, so you have to just refer to them.
-            For detailed CNF setup methods and parameters, follow the description in the MOP, not the example YAML code.'''
+            Based on this, please write the corresponding Ansible YAML code that automates the installation and configuration process described in the MOP with the following strict requirements:\n'''
             
-            prompts_2= f'''Kubernetes is already properly installed on another server, and the configuration file to connect to it is located at the default path.
-            So I can access the Kubernetes server from the current server. 
-            Please write code that connects to the Kubernetes server and creates a pod there. 
-            Do not write any code that performs direct actions on the local server or inside the Kubernetes pod.
+            prompts_2= f'''1. Kubernetes is already properly installed on a remote server, and the kubeconfig file needed to connect to it is located at the default path. I can access the Kubernetes server from my current (local) server.
+            2. Based on this setup, write a YAML code that fully automate the process of creating a Pod and installing a VNF inside it.
+            3. Do not write any code that performs direct actions on the local server or inside the Kubernetes Node.
+            4. You must keep only the following three values as variables: pod_name, namespace, and image_name, so that they can be passed in separately.
+            5. You should keep the pod name, namespace, and image fields as variables, so they can be passed separately. The variable names are 'pod_name', 'namespace', and 'image_name'. Aside from these three, do not use any other variables — all other values should be hardcoded explicitly.
+            6. Do not include a vars section in the code, as I will run it using my own variables.
+            7. Instead of using the cluster’s default DNS settings, manually set the DNS to {DNS_IP}.
+            8. Include the command sleep infinity in the container so that it stays alive and doesn’t get terminated.
+            9. Do not set the host_name option to True. 
+            10. Keep in mind that systemctl cannot be used inside containers. Even if the MOP instructs installing the VNF using systemctl, you must find an alternative method, such as running it with a daemon option.
             
-            You should keep the pod name, namespace, and image fields as variables, so they can be passed separately.
-            The variable names are 'pod_name', 'namespace', and 'image_name'.
-            Aside from these three, do not use any other variables—please write all other values explicitly.
-            I will run the code using my own variables, so do not include a 'vars' section in the code.
-            Also, instead of using the cluster's default DNS settings, manually set the DNS to '{DNS_IP}'.
-            For these parts, it would be helpful to refer to the example code.
-            You should put 'sleep infinity' command, so that container dosen't killed.
-            Don't make 'host_name' option as True.
-            Rememeber that, since systemctl cannot be used in containers, even if the MOP instructs to install the VNF using systemctl, an alternative method like running with daemon option, must be found.'''+ \
-            '''Through this, I want to be able to create the desired Pod by simply providing the values for the three variables — 'pod_name', 'namespace', and 'image_name' — and running the Ansible playbook you provide without making any modifications to the code. 
-            My goal is to fully automate the MOP process.
-            Please write it as a single code block, not separated into multiple pieces.
+            The final goal is that I should be able to create the desired Pod simply by providing the values for pod_name, namespace, and image_name, and executing the Ansible playbook you provide without any modifications to the code.
+            Write the entire code as a single code block, and do not split it into multiple pieces.
+            
             Here is the MOP: '''
 
     return prompts_1, prompts_2, good_example_str

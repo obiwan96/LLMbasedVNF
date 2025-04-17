@@ -230,7 +230,10 @@ def crawl_stackoverflow(cursor, conn, logging=False):
         last_timestamp = 0
         max_last_timestamp = 0
         crawled_ids = set()
-    keyword = 'Kubernetes'
+    #keyword = 'Kubernetes'
+    print('Please input the keyword to search:')
+    keyword = input()
+    print('ok.')
     # Todo: Maybe use multiple keywords later
 
     page = 1
