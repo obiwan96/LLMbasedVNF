@@ -209,26 +209,10 @@ def multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,sy
                             # VNF configuration related docs are not crawled yet. only StackOverflow
                             if 'Error occurs' in str(second_test_result):
                                 error_logs = '\n'.join(return_error_logs(str(second_test_result)))
-                                retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model)
-                                if logging_:
-                                    with open(logging_file_rag, 'a') as f:
-                                        f.write('------------------------------')
-                                        f.write('RAG input:\n')
-                                        f.write(error_logs+'\n')
-                                        f.write('#####')
-                                        f.write('RAG results:\n')
-                                        f.write(retrieved_texts+'\n')
+                                retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_)
                             else:
-                                retrieved_texts=RAG.RAG_search(second_test_result, collection, embed_model)
-                                if logging_:
-                                    with open(logging_file_rag, 'a') as f:
-                                        f.write('------------------------------')
-                                        f.write('RAG input:\n')
-                                        f.write(str(second_test_result)+'\n')
-                                        f.write('#####')
-                                        f.write('RAG results:\n')
-                                        f.write(retrieved_texts+'\n')
-                            second_test_result= str(second_test_result) + '\n And here is a related document. Please refer to it.' + retrieved_texts
+                                retrieved_texts=RAG.RAG_search(second_test_result, collection, embed_model, logging_)
+                            second_test_result= str(second_test_result) +  retrieved_texts
                             if logging_:
                                 with open(logging_file, 'a') as f:
                                     f.write ('RAG results:\n')
@@ -255,27 +239,11 @@ def multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,sy
                         error_start = check_log_error(str(server_or_message))
                         if error_start:
                             error_logs = '\n'.join(return_error_logs(str(server_or_message)))
-                            retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model)
-                            if logging_:
-                                with open(logging_file_rag, 'a') as f:
-                                    f.write('------------------------------')
-                                    f.write('RAG input:\n')
-                                    f.write(error_logs+'\n')
-                                    f.write('#####')
-                                    f.write('RAG results:\n')
-                                    f.write(retrieved_texts+'\n')
+                            retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_)
                         else:
-                            retrieved_texts=RAG.RAG_search(server_or_message, collection, embed_model)
-                            if logging_:
-                                with open(logging_file_rag, 'a') as f:
-                                    f.write('------------------------------')
-                                    f.write('RAG input:\n')
-                                    f.write(str(server_or_message)+'\n')
-                                    f.write('#####')
-                                    f.write('RAG results:\n')
-                                    f.write(retrieved_texts+'\n')
+                            retrieved_texts=RAG.RAG_search(server_or_message, collection, embed_model, logging_)
 
-                        server_or_message= str(server_or_message) + '\n And here is a related document. Please refer to it.' + retrieved_texts
+                        server_or_message= str(server_or_message) +  retrieved_texts
                         if logging_:
                             with open(logging_file, 'a') as f:
                                 f.write ('RAG results:\n')
@@ -313,7 +281,7 @@ def multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,sy
                         f.write(f"Average LLM process time: {sum([i[0] for i in pr_ti])/tot_num} seconds\n")
                         f.write(f"Average VM creation time: {sum([i[1] for i in pr_ti])/tot_num} seconds\n")
                         f.write(f"Average VM configuration time: {sum([i[2] for i in pr_ti])/tot_num} seconds\n")
-                    f.write(f"-------------------------------------------------------------\n")
+                    f.write(f"------------------------------------------------\n")
     end_time = time.time()
 
     print(f'Total execution time:{(end_time-total_start_time)/60/60} hours')
@@ -363,7 +331,6 @@ if __name__ == '__main__':
         apps_v1 = client.AppsV1Api()
     
     logging_file = 'log.txt'
-    logging_file_rag = 'log_rag.txt'
     logging_file_for_vnf = 'log_vnf.txt'
     with open(logging_file_for_vnf, 'w') as f:
         f.write('')
@@ -571,26 +538,10 @@ if __name__ == '__main__':
                                 # VNF configuration related docs are not crawled yet. only StackOverflow
                                 if 'Error occurs' in str(second_test_result):
                                     error_logs = '\n'.join(return_error_logs(str(second_test_result)))
-                                    retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model)
-                                    if logging_:
-                                        with open(logging_file_rag, 'a') as f:
-                                            f.write('------------------------------')
-                                            f.write('RAG input:\n')
-                                            f.write(error_logs+'\n')
-                                            f.write('#####')
-                                            f.write('RAG results:\n')
-                                            f.write(retrieved_texts+'\n')
+                                    retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_)
                                 else:
-                                    retrieved_texts=RAG.RAG_search(second_test_result, collection, embed_model)
-                                    if logging_:
-                                        with open(logging_file_rag, 'a') as f:
-                                            f.write('------------------------------')
-                                            f.write('RAG input:\n')
-                                            f.write(str(second_test_result)+'\n')
-                                            f.write('#####')
-                                            f.write('RAG results:\n')
-                                            f.write(retrieved_texts+'\n')
-                                second_test_result= str(second_test_result) + '\n And here is a related document. Please refer to it.' + retrieved_texts
+                                    retrieved_texts=RAG.RAG_search(second_test_result, collection, embed_model, logging_)
+                                second_test_result= str(second_test_result) +  retrieved_texts
                                 if logging_:
                                     with open(logging_file, 'a') as f:
                                         f.write ('RAG results:\n')
@@ -617,27 +568,11 @@ if __name__ == '__main__':
                             error_start = check_log_error(str(server_or_message))
                             if error_start:
                                 error_logs = '\n'.join(return_error_logs(str(server_or_message)))
-                                retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model)
-                                if logging_:
-                                    with open(logging_file_rag, 'a') as f:
-                                        f.write('------------------------------')
-                                        f.write('RAG input:\n')
-                                        f.write(error_logs+'\n')
-                                        f.write('#####')
-                                        f.write('RAG results:\n')
-                                        f.write(retrieved_texts+'\n')
+                                retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_)
                             else:
-                                retrieved_texts=RAG.RAG_search(server_or_message, collection, embed_model)
-                                if logging_:
-                                    with open(logging_file_rag, 'a') as f:
-                                        f.write('------------------------------')
-                                        f.write('RAG input:\n')
-                                        f.write(str(server_or_message)+'\n')
-                                        f.write('#####')
-                                        f.write('RAG results:\n')
-                                        f.write(retrieved_texts+'\n')
+                                retrieved_texts=RAG.RAG_search(server_or_message, collection, embed_model, logging_)
 
-                            server_or_message= str(server_or_message) + '\n And here is a related document. Please refer to it.' + retrieved_texts
+                            server_or_message= str(server_or_message) +  retrieved_texts
                             if logging_:
                                 with open(logging_file, 'a') as f:
                                     f.write ('RAG results:\n')
@@ -675,7 +610,7 @@ if __name__ == '__main__':
                         f.write(f"Average LLM process time: {sum([i[0] for i in pr_ti])/tot_num} seconds\n")
                         f.write(f"Average VM creation time: {sum([i[1] for i in pr_ti])/tot_num} seconds\n")
                         f.write(f"Average VM configuration time: {sum([i[2] for i in pr_ti])/tot_num} seconds\n")
-                    f.write(f"-------------------------------------------------------------\n")
+                    f.write(f"--------------------------------------------\n")
         with open(logging_file_for_vnf, 'a')as f:
             f.write(f" --- MOP: {mop_file}, success num: {mop_suc_num}\n")
     
@@ -699,7 +634,7 @@ if __name__ == '__main__':
             print(f"Average LLM process time: {sum([i[0] for i in pr_ti])/tot_num} seconds")
             print(f"Average VM creation time: {sum([i[1] for i in pr_ti])/tot_num} seconds")
             print(f"Average VM configuration time: {sum([i[2] for i in pr_ti])/tot_num} seconds")
-        print(f"-------------------------------------------------------------")
+        print(f"--------------------------------------------------")
     with open(logging_file_for_vnf, 'a')as f:
         for vnf in success_num_by_vnf:
             f.write(f"VNF: {vnf}, Total MOPs: {success_num_by_vnf[vnf]['total_num']}, Success: {success_num_by_vnf[vnf]['success_num']}\n")

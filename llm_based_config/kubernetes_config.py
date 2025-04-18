@@ -81,7 +81,7 @@ def check_log_error(logs):
         if error_word in logs.lower():
             return logs.lower().find(error_word)
         
-    if 'ERR' in logs:
+    if 'ERR' in logs or 'Err' in logs:
         return logs.find('ERR')
     return False
 
@@ -311,6 +311,13 @@ def run_config(v1, pod_name, namespace, input, output, exactly=False):
     return response
 
 def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
+    exit_code_dict = {'1' : 'Generral error, likes script failure, invalid arguments, etc.', 
+                      '126': 'Command found but not executable, permission problem or command is not executable',
+                      '127': 'Command not found, invalid command or not in PATH',
+                      '128': 'Invalid exit argument, invalid argument to exit',
+                      '137': 'Container killed, usually due to out of memory (OOM) or manual termination',
+                      '143': 'Container terminated by SIGTERM, usually due to manual termination',
+                      '255': 'Exit status out of range, usually indicates an error in the script or command'}
     # I can't find how to check all commands run well.
     # Just waiting is seems better. 150 is enough?
     start_time = time.time()
@@ -332,7 +339,7 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
                     # Container command end with normal state
                     return f"Container '{container_name}' exit. But it shoud not exit. Please add 'sleep infinity' command."
                 else:
-                    return f"Container '{container_name}' failed with exit code {exit_code}."
+                    return f"Container '{container_name}' failed with exit code {exit_code}. And it means {exit_code_dict[exit_code]}."
             else:
                 pass
         logs = get_pod_logs(v1, pod_name, namespace)
@@ -356,6 +363,10 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
             if not "sleep infinity" in processes:
                 return "sleep infinity is NOT running. Please add 'sleep infinity' command."
         else:
+            logs = get_pod_logs(v1, pod_name, namespace)
+            error_index = check_log_error(logs)
+            if error_index:
+                return "Error occur while fetching Pod processes: " + str(result.stderr) +  '\n' + logs [error_index:]
             return "Error occur while fetching Pod processes: " + str(result.stderr)
 
     except Exception as e:

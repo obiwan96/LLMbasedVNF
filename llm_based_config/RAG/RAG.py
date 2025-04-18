@@ -5,6 +5,7 @@ from sentence_transformers import SentenceTransformer
 import chromadb
 import uuid
 
+logging_file_rag = 'log_rag.txt'
 def RAG_init(db_names): 
     # db_names msut me a list of db_names. ex) ['kubernetes_docs.db']
     collection_name="documents"
@@ -43,14 +44,17 @@ def RAG_init(db_names):
     for doc in documents:
         if doc["question"]:
             embedding = embed_model.encode(doc["title"]+doc["question"]).tolist()
+            collection.add(documents=[doc["question"]+doc["text"]], embeddings=[embedding], metadatas=[{'title':doc['title']}], ids=[str(uuid.uuid4())])
         else:
             embedding = embed_model.encode(doc["title"]).tolist()
-        collection.add(documents=[doc["text"]], embeddings=[embedding], metadatas=[{'title':doc['title']}], ids=[str(uuid.uuid4())])
+            collection.add(documents=[doc["text"]], embeddings=[embedding], metadatas=[{'title':doc['title']}], ids=[str(uuid.uuid4())])
     return collection, embed_model
 
-def RAG_search(query, collection, embed_model, n_results=1):
+def RAG_search(query, collection, embed_model, n_results=1, logging_=False):
     # vector search only now.
     # Todo: Graph based search
+    if 'exit code' in str(query):
+        return ''
     query_embedding = embed_model.encode(str(query)).tolist()
 
     results = collection.query(query_embeddings=[query_embedding], n_results=n_results)
@@ -58,7 +62,16 @@ def RAG_search(query, collection, embed_model, n_results=1):
     retrieved_texts_titles = [item['title'] for item in results['metadatas'][0]]
     #print("Retrieved:", retrieved_texts_titles)
     retrieved_texts = results['documents'][0][0]
-    return retrieved_texts
+    if logging_:
+        with open(logging_file_rag, 'a') as f:
+            f.write('------------------------------\n')
+            f.write('RAG input:\n')
+            f.write(str(query)+'\n')
+            f.write('#####\n')
+            f.write('RAG results:\n')
+            f.write(retrieved_texts_titles+'\n')
+            f.write(retrieved_texts+'\n')
+    return '\nAnd here is a related document. Please refer to it.\n' + retrieved_texts
 
 if __name__ == '__main__':
     db_name = 'openstack_docs.db'
