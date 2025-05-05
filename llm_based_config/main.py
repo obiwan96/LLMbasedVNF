@@ -209,9 +209,9 @@ def multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,sy
                             # VNF configuration related docs are not crawled yet. only StackOverflow
                             if 'Error occurs' in str(second_test_result):
                                 error_logs = '\n'.join(return_error_logs(str(second_test_result)))
-                                retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_)
+                                retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_, vnf_name=vnf)
                             else:
-                                retrieved_texts=RAG.RAG_search(second_test_result, collection, embed_model, logging_)
+                                retrieved_texts=RAG.RAG_search(second_test_result, collection, embed_model, logging_, vnf_name=vnf)
                             second_test_result= str(second_test_result) +  retrieved_texts
                             if logging_:
                                 with open(logging_file, 'a') as f:
@@ -239,9 +239,9 @@ def multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,sy
                         error_start = check_log_error(str(server_or_message))
                         if error_start:
                             error_logs = '\n'.join(return_error_logs(str(server_or_message)))
-                            retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_)
+                            retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_, vnf_name=vnf)
                         else:
-                            retrieved_texts=RAG.RAG_search(server_or_message, collection, embed_model, logging_)
+                            retrieved_texts=RAG.RAG_search(server_or_message, collection, embed_model, logging_, vnf_name=vnf)
 
                         server_or_message= str(server_or_message) +  retrieved_texts
                         if logging_:
@@ -302,6 +302,7 @@ if __name__ == '__main__':
     argparser.add_argument('--no-log', action='store_true', help= 'Do not log the result')
     argparser.add_argument('--max-limit', help= 'Max limit of MOPs to test', type=int, default=3)
     argparser.add_argument('--debate', action='store_true', help= 'multi-agent-debate')
+    argparser.add_argument('--judge', action='store_true', help= 'judge LLM in RAG')
 
     argparser=argparser.parse_args()
     if argparser.OpenStack:
@@ -370,7 +371,6 @@ if __name__ == '__main__':
         prompts = (prompts_1, prompts_2, example_code)
         multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,system_name, prompts, logging_, maximum_tiral, argparser.RAG)
         sys.exit()
-
     if argparser.RAG:
         db_list=['RAG/stackoverflow_docs.db']
         if argparser.OpenStack:
@@ -382,6 +382,9 @@ if __name__ == '__main__':
         if argparser.Ansible:
             db_list.append('RAG/ansible_docs.db')
         collection, embed_model = RAG.RAG_init(db_list)
+        if argparser.judge:
+            judge_llm_model_name='llama3.3'
+            judge_LLM = Ollama(model=judge_llm_model_name, num_ctx=num_ctx_list[judge_llm_model_name])
     all_mop_num = len(mop_list)
     first_create_success_num = {}
     first_config_success_num = {}
@@ -538,14 +541,26 @@ if __name__ == '__main__':
                                 # VNF configuration related docs are not crawled yet. only StackOverflow
                                 if 'Error occurs' in str(second_test_result):
                                     error_logs = '\n'.join(return_error_logs(str(second_test_result)))
-                                    retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_)
+                                    retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_, vnf_name=vnf)
                                 else:
-                                    retrieved_texts=RAG.RAG_search(second_test_result, collection, embed_model, logging_)
-                                second_test_result= str(second_test_result) +  retrieved_texts
-                                if logging_:
-                                    with open(logging_file, 'a') as f:
-                                        f.write ('RAG results:\n')
-                                        f.write(retrieved_texts+'\n')
+                                    retrieved_texts=RAG.RAG_search(second_test_result, collection, embed_model, logging_, vnf_name=vnf)
+                                if argparser.judge:
+                                    judge_result = judge_LLM.invoke(f'''Please determine whether the following text is related to this error message. 
+                                        The error message is {second_test_result}.\n The text to be checked is here. {retrieved_texts}\n Return ‘Yes’ if they are related, or ‘No’ if they are not.''')
+                                    if logging_:
+                                        with open(logging_file, 'a') as f:
+                                            f.write('RAG results:\n')
+                                            f.write(retrieved_texts+'\n')
+                                            f.write ('Judge result:\n')
+                                            f.write(judge_result+'\n')
+                                    if 'yes' in judge_result.lower():
+                                        second_test_result= str(second_test_result) +  retrieved_texts
+                                else:
+                                    second_test_result= str(second_test_result) +  retrieved_texts
+                                    if logging_:
+                                        with open(logging_file, 'a') as f:
+                                            f.write ('RAG results:\n')
+                                            f.write(retrieved_texts+'\n')
                             if system_name=='OpenStack':
                                 llm_response=chat.invoke('When I run your code, I can successfully create VM, '+ \
                                     'but VNF configuration is failed. I got this error message. Please correct the code and return the updated version.\n'+str(second_test_result))['response']
@@ -568,15 +583,27 @@ if __name__ == '__main__':
                             error_start = check_log_error(str(server_or_message))
                             if error_start:
                                 error_logs = '\n'.join(return_error_logs(str(server_or_message)))
-                                retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_)
+                                retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_, vnf_name=vnf)
                             else:
-                                retrieved_texts=RAG.RAG_search(server_or_message, collection, embed_model, logging_)
+                                retrieved_texts=RAG.RAG_search(server_or_message, collection, embed_model, logging_, vnf_name=vnf)
 
-                            server_or_message= str(server_or_message) +  retrieved_texts
-                            if logging_:
-                                with open(logging_file, 'a') as f:
-                                    f.write ('RAG results:\n')
-                                    f.write(retrieved_texts+'\n')
+                            if argparser.judge:
+                                judge_result = judge_LLM.invoke(f'''Please determine whether the following text is related to this error message. 
+                                    The error message is {server_or_message}.\n The text to be checked is here. {retrieved_texts}\n Return ‘Yes’ if they are related, or ‘No’ if they are not.''')
+                                if logging_:
+                                    with open(logging_file, 'a') as f:
+                                        f.write('RAG results:\n')
+                                        f.write(retrieved_texts+'\n')
+                                        f.write ('Judge result:\n')
+                                        f.write(judge_result+'\n')
+                                if 'yes' in judge_result.lower():
+                                    server_or_message= str(server_or_message) +  retrieved_texts
+                            else:
+                                server_or_message= str(server_or_message) +  retrieved_texts
+                                if logging_:
+                                    with open(logging_file, 'a') as f:
+                                        f.write ('RAG results:\n')
+                                        f.write(retrieved_texts+'\n')
                         if form=='Python' and 'has no attribute ' in str(server_or_message):
                             func_name = str(server_or_message).split("'")[3]
                             #print(func_name)

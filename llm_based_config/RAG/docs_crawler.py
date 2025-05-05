@@ -213,14 +213,15 @@ def html_to_text(html):
     soup = BeautifulSoup(html, "html.parser")
     return soup.get_text(separator="\n", strip=True)
 
-def crawl_stackoverflow(cursor, conn, logging=False):
+def crawl_stackoverflow(cursor, conn, take_up = False, logging=False):
     SITE = StackAPI('stackoverflow')
     SITE.page_size = 100
     SITE.max_pages = 20 # need modify? banned from stack oveflow
     
     # State file for saving last question date
     state_file = "stack_crawl_state.json"
-    if os.path.exists(state_file):
+    if os.path.exists(state_file) and take_up:
+        # Load the last crawl state
         with open(state_file, "r") as f:
             state = json.load(f)
             last_timestamp = state.get("last_creation_date", 0)
@@ -281,7 +282,7 @@ def crawl_stackoverflow(cursor, conn, logging=False):
                 cursor.execute('INSERT INTO documents (title, question, content) VALUES (?, ?, ?)', (q_title, q_body, total_answer))
                 conn.commit()
                 print(f"Crawled: {q_title}")
-            if not questions.get("has_more", False):
+            if not questions_data.get("has_more", False):
                 break
 
             page += 1
@@ -298,6 +299,32 @@ def crawl_stackoverflow(cursor, conn, logging=False):
     
     return len(crawled_ids)
 
+def delete_overlap(db_name):
+    conn = sqlite3.connect(db_name)
+    cursor = conn.cursor()
+    if 'stackoverflow' in db_name:
+        cursor.execute('''
+            DELETE FROM documents
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM documents
+                GROUP BY title
+            )
+        ''')
+    else:
+        cursor.execute('''
+            DELETE FROM documents
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM documents
+                GROUP BY url, title
+            )
+        ''')
+    deleted_rows = cursor.rowcount
+    print(f"Deleted {deleted_rows} duplicate rows from {db_name}.")
+    conn.commit()
+    conn.close()
+
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--openstack', action='store_true', help='Crawl OpenStack docs')
@@ -306,6 +333,7 @@ if __name__=='__main__':
     parser.add_argument('--ansible', action='store_true', help='Crawl Ansible docs')
     parser.add_argument('--stack', action='store_true', help='Crawl StackOverflow')
     parser.add_argument('--all', action='store_true', help='Crawl all docs')
+    parser.add_argument('--take-up', action='store_true', help='Take up the last crawl state')
     parser.add_argument('--logging', action='store_true', help='Logging or not')
     
     args = parser.parse_args()
@@ -344,6 +372,6 @@ if __name__=='__main__':
         conn = sqlite3.connect('stackoverflow_docs.db')
         cursor = conn.cursor()
         visited_urls = set()
-        results = crawl_stackoverflow(cursor, conn, args.logging)
+        results = crawl_stackoverflow(cursor, conn, args.take_up, args.logging)
         print(f'Total {results} nums of doc. crawled.')
         conn.close()
