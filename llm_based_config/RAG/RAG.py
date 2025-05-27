@@ -4,6 +4,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from sentence_transformers import SentenceTransformer
 import chromadb
 import uuid
+from docs_crawler import delete_overlap
 
 logging_file_rag = 'log_rag.txt'
 def RAG_init(db_names): 
@@ -15,7 +16,9 @@ def RAG_init(db_names):
     collection = chroma_client.create_collection(collection_name)
     #embed_model = SentenceTransformer('all-MiniLM-L6-v2')
     # Let's use INF-Retriever-v1 model, which shows higher performance in coding domain
+    # But after change, initiation becomes much slower.
     embed_model = SentenceTransformer("infly/inf-retriever-v1", trust_remote_code=True)
+    embed_model.max_seq_length = 512 # embedding model get title and question, so 512 is enough.
 
     documents = []
     for db_name in db_names:
@@ -29,14 +32,14 @@ def RAG_init(db_names):
             rows = cursor.fetchall()
             for row in rows:
                 if row[2].strip() != "":
-                    documents.append({'id': row[0], 'title': row[1], 'text': row[2], 'question': row[3]})
+                    documents.append({'id': row[0], 'title': row[1], 'text': row[2], 'question': row[3], 'db_name': db_name})
         else:
             # Question colum dosen't exist.
             cursor.execute("SELECT id, title, content FROM documents")
             rows = cursor.fetchall()
             for row in rows:
                 if row[2].strip() != '':
-                    documents.append({'id': row[0], 'title': row[1], 'text': row[2], 'question':row[2]}) 
+                    documents.append({'id': row[0], 'title': row[1], 'text': row[2], 'question':row[2], 'db_name': db_name}) 
                     # To make embedding, I will use title and text for these cases.
                     # If question exist, use tite and question for embedding
         
@@ -47,10 +50,10 @@ def RAG_init(db_names):
     for doc in documents:
         if doc["question"]:
             embedding = embed_model.encode(doc["title"]+doc["question"]).tolist()
-            collection.add(documents=[doc["question"]+doc["text"]], embeddings=[embedding], metadatas=[{'title':doc['title']}], ids=[str(uuid.uuid4())])
+            collection.add(documents=[doc["question"]+doc["text"]], embeddings=[embedding], metadatas=[{'title':doc['title'], 'db_name': doc['db_name']}], ids=[str(uuid.uuid4())])
         else:
             embedding = embed_model.encode(doc["title"]).tolist()
-            collection.add(documents=[doc["text"]], embeddings=[embedding], metadatas=[{'title':doc['title']}], ids=[str(uuid.uuid4())])
+            collection.add(documents=[doc["text"]], embeddings=[embedding], metadatas=[{'title':doc['title'], 'db_name': doc['db_name']}], ids=[str(uuid.uuid4())])
     return collection, embed_model
 
 def RAG_search(query, collection, embed_model, logging_=False, n_results=1, vnf_name=None):
@@ -61,25 +64,54 @@ def RAG_search(query, collection, embed_model, logging_=False, n_results=1, vnf_
     query_embedding = embed_model.encode(str(query)).tolist()
 
     results = collection.query(query_embeddings=[query_embedding], n_results=n_results)
+    
+    retrieved_texts = []
+    for i in range(n_results):
+        if results['documents'][0][i] in [None, '']:
+            break
+        retrieved_texts.append({
+            'title': results['metadatas'][0][i]['title'],
+            'text': results['documents'][0][i],
+            'db_name': results['metadatas'][0][i]['db_name'],
+            'distance': results['distances'][0][i]
+        })
 
-    retrieved_texts_titles = [item['title'] for item in results['metadatas'][0]]
+    #retrieved_texts_titles = [item['title'] for item in results['metadatas'][0]]
     #print("Retrieved:", retrieved_texts_titles)
-    retrieved_texts = results['documents'][0][0]
+    #retrieved_texts = results['documents'][0]
     if logging_:
         with open(logging_file_rag, 'a') as f:
-            f.write('------------------------------\n')
+            f.write('*******-------------------******\n')
             if vnf_name:
                 f.write('VNF name: '+vnf_name+'\n')
             f.write('RAG input:\n')
-            f.write(str(query)+'\n')
-            f.write('#####\n')
             f.write('RAG results:\n')
-            f.write('\n'.join(retrieved_texts_titles)+'\n')
-            f.write(retrieved_texts+'\n')
-    if retrieved_texts.strip() == '':
-        print('RAG something wrong'+ retrieved_texts_titles[0])
-    return '\nAnd here is a related document. Please refer to it.\n' + retrieved_texts
+            f.write(str(query)+'\n')
+            for i in range(len(retrieved_texts)):
+                f.write('------------------------------\n')              
+                f.write('Title: '+retrieved_texts[i]['title']+'\n')
+                f.write('Distance: '+str(retrieved_texts[i]['distance'])+'\n')
+                f.write('DB name: '+retrieved_texts[i]['db_name']+'\n')
+                f.write('Text: '+retrieved_texts[i]['text']+'\n')
+    if len(retrieved_texts) == 0:
+        print('RAG something wrong')
+    #return '\nAnd here is a related document. Please refer to it.\n' + retrieved_texts
+    
+    ##### TODO: change the return format, so need to change the main.py ##########
+    return retrieved_texts
+
 
 if __name__ == '__main__':
-    db_name = 'openstack_docs.db'
-    RAG_init(db_name)
+    db_list=['kubernetes_docs.db', 'ansible_docs.db', 'stackoverflow_docs.db']
+    for db_name in db_list:
+        delete_overlap(db_name)
+    collection, embed_model = RAG_init(db_list)
+    print('RAG init end')
+    while True:
+        query = input('Enter your query: ')
+        if query.lower() == 'exit':
+            break
+        result = RAG_search(query, collection, embed_model)
+        for res in result:
+            print(f"Title: {res['title']}, Distance: {res['distance']}, DB Name: {res['db_name']}")
+            print(f"Text: {res['text']}\n")

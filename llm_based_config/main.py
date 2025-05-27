@@ -26,6 +26,11 @@ from openstack_config import *
 from kubernetes_config import *
 import sys
 
+import requests
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
+import torch
+
 logging.getLogger("paramiko").setLevel(logging.CRITICAL) 
 
 def multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,system_name, prompts, logging_, maximum_tiral, ragging):
