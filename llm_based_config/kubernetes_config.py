@@ -13,6 +13,31 @@ import subprocess
 
 image_name='dokken/ubuntu-20.04'
 
+errorcode_dict={
+    0: 'Run well',
+    1: "Can't find code",
+    2: 'VNF does not work as intended. Rlated message will be out',
+    10: 'Parsing false, check the format',
+    11: "Your YAML code runs on localhost or Kubernetes nodes, but there's no task to perform there. Please update it to run only inside Kubernetes.",
+    12: 'infinite loop detected',
+    13: 'error while import create_pod',
+    14: 'create_pod does not exist, Error message may out',
+    20: 'Error occur in Pod. Error message is out',
+    21: 'Pod fall in error state. State information is out',
+    22: 'Exception occur in my code',
+    23: 'Ansible failed. (status, output) will be out',
+    30: 'Error occur while configure VNF. Error logs will be out',
+    31: "Pod name doesn't exist in Namespace",
+    32: "container exit, need to add 'sleep infinity'. container name may out",
+    33: 'container failed. (continer_name, error_code, error_message) will be out',
+    41: 'There was a task that was skipped due to an incorrect host name. Please correct the host name.',
+    42: "the answer to life the universe and everything",
+    43: 'Error while searching Pod',
+    51: "function didn't return True. Here is the output. \n",
+    90: 'Running Timeout. stdout may out',
+    91: 'Container Ready Timeout'
+}
+
 def list_pods_in_namespace(v1, namespace=namespace):
     pods = v1.list_namespaced_pod(namespace)
     
@@ -108,19 +133,19 @@ def test_creation_ansible_K8S(llm_response, vnf, model, vm_num, v1, timeout=300)
                 break
     except:
         #print('parsing fail')
-        return False, "I can't see YAML code in your response."
+        return 1, None
     if not yml_code:
-        return False, "I can't see YAML code in your response."
+        return 1, None
     try:
         pod_name= vnf.lower()+'-pod'
         yaml_data = yaml.safe_load(yml_code[0])
         update_yml(yaml_data)
         if not check_yml_if_do_in_localhost_or_nodes(yaml_data):
-            return False, f'''Your YAML code runs on localhost or Kubernetes nodes, but there's no task to perform there. Please update it to run only inside Kubernetes.'''
+            return 11, None
         #if not '{{ pod_name }}' in str(yaml_data) or not '{{ namespace }}' in str(yaml_data):
         #    return False, f"YAML parsing failed. Please use {pod_name} as pod name and {namespace} as namespace in the YAML code by refering the example code."
     except:
-        return False, "YAML parsing failed. Please check the format of the YAML code. Please refer to the example code again."
+        return 10, None # "YAML parsing failed. Please check the format of the YAML code. Please refer to the example code again."
     file_name = f'config_{vnf}_{model.replace(".","")}_{vm_num}.yml'
     with open(config_file_path + file_name, 'w') as f:
         yaml.dump(yaml_data, f)
@@ -138,7 +163,7 @@ def test_creation_ansible_K8S(llm_response, vnf, model, vm_num, v1, timeout=300)
             )
         while runner_thread.is_alive():
             if time.time() - start_time > timeout:
-                return False, f"Ansible running doesn't end within {timeout} seconds. Test fail.\n Here are Ansible running results:\n"+collector.captured_output
+                return 90, f"Here are Ansible running results:\n"+collector.captured_output
             time.sleep(3)
 
         #print("상태:", response.status)
@@ -146,7 +171,7 @@ def test_creation_ansible_K8S(llm_response, vnf, model, vm_num, v1, timeout=300)
         
         if runner.rc == 0:
             if 'skipping: no hosts matched' in collector.captured_output:
-                return False, 'There was a task that was skipped due to an incorrect host name. Please correct the host name.'
+                return 41, None
             # Ansible run well
             try:
                 # Wait for creation success for Pod.                
@@ -167,31 +192,31 @@ def test_creation_ansible_K8S(llm_response, vnf, model, vm_num, v1, timeout=300)
                         
                         if phase == "Running" and ready:
                             # Pod is creating successfully
-                            return True, pod_name
+                            return 0, pod_name
                         elif phase in ["CrashLoopBackOff", "Error"]:
                             # Pod is in error state.
                             error_logs = get_pod_logs(v1, pod_name, namespace)
                             if error_logs:
-                                return False, "Ansible ran, but Pod got error: "+ error_logs
+                                return 20, error_logs
                             else:
-                                return False, f"Ansible ran, but Pod got into {phase} status."
+                                return 21, phase
                     if time.time() - start_time > timeout:
-                        return False, f"Ansible ran succeed, but the containers are not ready whitin {timeout} seconds. Test fail."
+                        return 91, timeout
                     time.sleep(5)
             except ApiException as e:
                 if e.status == 404:
-                    return False, f"Ansible ran succeeed. But Pod '{pod_name}' doesn't exist in the Kubernetes namespace '{namespace}."
+                    return 31, None
                 else:
-                    return False, "Error while searching Pod"
+                    return 43, None
             
         else:
             ansible_output=ansi_result_clear(collector.captured_output)
-            return False, 'Ansible ran failed. Ansible runner status: '+runner.status + '\n Here are Ansible running results:\n'+ansible_output
+            return 23, (runner.status, ansible_output)
 
     except Exception as e:
         #print(e)
         #print('VM creation failed')
-        return False, e
+        return 22, e
     
 def test_creation_python_K8S(llm_response, vnf, model, vm_num, trial, v1, namespace, timeout=300):
     config_file_path = 'K8S_Conf/'
@@ -206,28 +231,28 @@ def test_creation_python_K8S(llm_response, vnf, model, vm_num, trial, v1, namesp
                 break
     except:
         #print('parsing fail')
-        return False, "I can't see Python code in your response."
+        return 1, None
     if not python_code:
-        return False, "I can't see Python code in your response."
+        return 1, None
     
     file_name = f'config_{vnf}_{model.replace(".","")}_{vm_num}_{trial}.py'
     if 'while True' in python_code[0]:
-        return False, "Your code include infinite loop. Please remove it."
+        return 12, None
     with open(config_file_path + file_name, 'w') as f:
         f.write(python_code[0])
     result = wrap_code_in_main(config_file_path + file_name, config_file_path + file_name)
     if not result:
-        return False, 'Code parsing failed. Maybe some syntax error or unexpected indentation occured.'
+        return 10, None
    
     try:
         create_pod = __import__(config_file_path[:-1] + '.' + file_name[:-3],fromlist=['create_pod'])
     except Exception as e:
-        return False, str(e)+" Please put the code inside the 'create_pod' function."
+        return 14, str(e)
     if not hasattr(create_pod, 'create_pod'):
         #print (config_file_path[:-1] + '.' + file_name[:-3])
         if 'create_pod(' in python_code[0]:
-            return False, r"I got error while import 'create_pod'. Please check the indentation or grammar."
-        return False, " Please put the code inside the 'create_pod' function."
+            return 13, None
+        return 14, None
 
     try:
         if not check_pod_errors(v1, 'kube-system') or not check_pod_errors(v1, 'kube-flannel'):
@@ -254,32 +279,32 @@ def test_creation_python_K8S(llm_response, vnf, model, vm_num, trial, v1, namesp
                         
                         if phase == "Running":
                             # Pod is creating successfully
-                            return True, pod_name
+                            return 0, pod_name
                         elif phase in ["CrashLoopBackOff", "Error"]:
                             # Pod is in error state.
                             error_logs = get_pod_logs(v1, pod_name, namespace)
                             if error_logs:
-                                return False, "'create_pod' ran, but Pod got error: "+ error_logs
+                                return 20, error_logs
                             else:
-                                return False, f"'create_pod' ran, but Pod got into {phase} status."
+                                return 21, phase
                     if time.time() - start_time > timeout:
-                        return False, f"'create_pod' ran succeed, but the containers are not ready whitin {timeout} seconds. Test fail. Please check again you use right image_name, namespace variables for pod."
+                        return 91, timeout
                     time.sleep(5)
             except ApiException as e:
                 if e.status == 404:
-                    return False, f"'create_pod' ran succeeed. But Pod '{pod_name}' doesn't exist in the Kubernetes namespace '{namespace}."
+                    return 31, None
                 else:
-                    return False, "Error while searching Pod"
+                    return 43, None
         else:
-            return False, "'create_pod' didn't return True. Here is the output. \n"+stdout_contents
+            return 51, stdout_contents
     except Exception as e:
         sys.stdout = sys.__stdout__
         stdout_contents = stdout_capture.getvalue()
         stdout_capture.close()        
         if stdout_contents:      
-            return False, stdout_contents+str(e)
+            return 22, stdout_contents+str(e)
         else:
-            return False, e
+            return 22, e
     #except Exception as e:
     #    return False, str(e)+" Please put the code inside the 'create_pod' function."
 
@@ -327,7 +352,7 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
         try:
             pod = v1.read_namespaced_pod(name=pod_name, namespace=namespace)
         except:
-            return "Pod named with pod_name doesn't exist. Please use pod_name variable directly."
+            return 31, None
         for container in pod.status.container_statuses:
             container_name = container.name
             container_state = container.last_state
@@ -339,15 +364,15 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
                 # Check if exit code is 0 (normal termination)
                 if exit_code == 0:
                     # Container command end with normal state
-                    return f"Container '{container_name}' exit. But it shoud not exit. Please add 'sleep infinity' command."
+                    return 32, (container_name)
                 else:
-                    return f"Container '{container_name}' failed with exit code {exit_code}. And it means {exit_code_dict[exit_code]}."
+                    return 33, (container_name, exit_code, exit_code_dict[exit_code])
             else:
                 pass
         logs = get_pod_logs(v1, pod_name, namespace)
         error_index = check_log_error(logs)
         if error_index:
-            return "Error occurs while configuring VNF. Logs:\n"+ logs [error_index:]
+            return 30, logs[max(error_index-5, 0):]
         if time.time() - start_time > wait_time:
             # error or exit did not occur while wait_time
             break
@@ -363,16 +388,16 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
         if result.returncode == 0:
             processes = result.stdout            
             if not "sleep infinity" in processes:
-                return "sleep infinity is NOT running. Please add 'sleep infinity' command."
+                return 32, None
         else:
             logs = get_pod_logs(v1, pod_name, namespace)
             error_index = check_log_error(logs)
             if error_index:
-                return "Error occur while fetching Pod processes: " + str(result.stderr) +  '\n' + logs[error_index:]
-            return "Error occur while fetching Pod processes: " + str(result.stderr)
+                return 30,  str(result.stderr) +  '\n' + logs[max(error_index-5, 0):]
+            return 30, str(result.stderr) + '\n' + logs[-5:]
 
     except Exception as e:
-        return "Error occur while fetching Pod processes: " + str(e)
+        return 30, str(e)
 
     if vnf == 'firewall':
         input_operation , output_operation, exactly = 'sudo iptables -L -v -n', 'DROP', False
@@ -391,12 +416,12 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
         if vnf == 'Haproxy':
             result = run_config(v1, pod_name, namespace, 'haproxy -c -f /etc/haproxy/haproxy.cfg', 'Configuration file is valid', False)
             if result == True:
-                return True
+                return 0, None
             else:
-                return "When I put 'haproxy -c -f /etc/haproxy/haproxy.cfg' operation in Pod to check the VNF, but got this results. \n"+ result+ "It should return 'Configuration file is valid'."
-        return True
+                return 2, "When I put 'haproxy -c -f /etc/haproxy/haproxy.cfg' operation in Pod to check the VNF, but got this results. \n"+ result+ "It should return 'Configuration file is valid'."
+        return 0, None
     else:
-        return f"When I put '{input_operation}' operation in Pod to check VNF, it return:\n"+result+ f"It should return '{output_operation}'."
+        return 2, f"When I put '{input_operation}' operation in Pod to check VNF, it return:\n"+result+ f"It should return '{output_operation}'."
 
 def delete_pod(v1, pod_name, namespace=namespace, logging_=False):
     try:

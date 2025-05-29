@@ -25,6 +25,7 @@ from prompt import prompt, namespace
 from openstack_config import * 
 from kubernetes_config import *
 import sys
+import json
 
 import requests
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
@@ -150,8 +151,10 @@ def multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,sy
             else:
                 test_result, server_or_message = test_creation_ansible_K8S(llm_response, vnf, model, vm_num[vnf], v1, 600)
             spend_time[1] = time.time()-start_time
-            if test_result == True:
-                if system_name=='OpenStack':
+            if test_result == 0:
+                # K8S change to return 0
+                # ToDo: OpenStack module still return 'True' if succeed. 
+                if system_name=='OpenStack': 
                     try:
                         server = conn.compute.wait_for_server(server_or_message)
                     except:
@@ -165,7 +168,7 @@ def multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,sy
                         continue
                 # VM creation success.
                 # Now, test the configuration
-                print('creation success')
+                #print('creation success')
                 if not already_success:
                     create_success_num[lang][model] += 1
                     already_success = True
@@ -182,13 +185,14 @@ def multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,sy
                 if system_name=='OpenStack':
                     second_test_result = test_openstack_configuration(server_or_message, vnf, model, vm_num[vnf], conn, None)
                 if system_name=='Kubernetes':
-                    second_test_result = test_K8S_configuration(server_or_message, vnf, v1, namespace)
+                    second_test_result, second_message = test_K8S_configuration(server_or_message, vnf, v1, namespace)
                 spend_time[2] = time.time()-start_time
                 if system_name=='OpenStack':
                     conn.delete_server(server_or_message.id)
                 if system_name=='Kubernetes':
                     delete_pod(v1, server_or_message, namespace)
-                if second_test_result == True:
+                if second_test_result == 0:
+                    # ToDo: OpenStack module still return 'True' if succeed. 
                     process_time[model].append(spend_time)
                     success_num_by_vnf[vnf]['success_num'] += 1
                     config_success_num[lang][model] += 1
@@ -202,32 +206,51 @@ def multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,sy
                     break
                 else:
                     # VM Config test failed.
-
-                    # Todo: add RAG here.
-                    if logging_:
-                        with open(logging_file, 'a') as f:
-                            f.write('Config test failled. Results:\n')
-                            f.write(str(second_test_result)+'\n')
                     if _ < maximum_tiral-1:
                         start_time = time.time()
-                        if argparser.RAG and not 'It should return' in str(second_test_result):
-                            # VNF configuration related docs are not crawled yet. only StackOverflow
-                            if 'Error occurs' in str(second_test_result):
-                                error_logs = '\n'.join(return_error_logs(str(second_test_result)))
-                                retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_, vnf_name=vnf)
-                            else:
-                                retrieved_texts=RAG.RAG_search(second_test_result, collection, embed_model, logging_, vnf_name=vnf)
-                            second_test_result= str(second_test_result) +  retrieved_texts
+                        if second_test_result == 2:
+                            second_test_result = second_message
+                            inform_message= ''
+                            request_message=''
+                        elif second_test_result == 31:
+                            inform_message= ''
+                            second_message = "It doesn't seem to be set to variable for 'pod_name' and 'namespace' in the created pod. Modify it to set to variable."
+                            request_message = ''
+                        elif second_test_result == 32:
+                            inform_message= ''
+                            second_message = f"After I run your code, the container '{second_message}' exited."                                 
+                            request_message = "Please modify your code by adding 'sleep infinity' so that the container does not turn off. Please show me the updated version.\n"                        
+                        elif second_test_result == 30:
+                            inform_message = 'While configure VNF with your code, I got this error. \n'
+                        elif second_test_result == 33:
+                            container, error_code, error_message = second_message
+                            second_message = error_message
+                            inform_message = f"An error with error code {error_code} occurred in the container '{container}' while operating your code. It means "
+                        else:
+                            print('something wrong')
+                        with open(logging_file, 'a') as f:
+                            f.write('Config test failled. Results:\n')
+                            f.write(errorcode_dict[second_test_result]+'\n')
+                            f.write(second_message+'\n')
+                        if  argparser.RAG and second_test_result in [30, 33]:
+                            # VNF configuration related docs are not crawled yet. only StackOverflow                            
+                            retrieved_docs=RAG.RAG_search(second_message, collection, embed_model, logging_, vnf_name=vnf)
+                            retrieved_texts='And here are some related documents. Please refer to them.\n'
+                            for retrieved_doc in retrieved_docs:
+                                retrieved_texts += retrieved_doc['text']+'\n'
+                            request_message +=  retrieved_texts
                             if logging_:
                                 with open(logging_file, 'a') as f:
-                                    f.write ('RAG results:\n')
+                                    f.write ('RAG results:\n Dstance: ')
+                                    f.write(' '.join([str(doc['distance']) for doc in retrieved_docs])+'\n')
                                     f.write(retrieved_texts+'\n')
+                        if request_message =='':
+                            request_message='Please correct your code and return the updated version by refering MOP again to configure VNF correctly.\n'
                         if system_name=='OpenStack':
                             llm_response=chat.invoke('When I run your code, I can successfully create VM, '+ \
                                 'but VNF configuration is failed. I got this error message. Please correct the code and return the updated version.\n'+str(second_test_result))['response']
                         if system_name == 'Kubernetes':
-                            llm_response=chat.invoke('When I run your code, I can successfully create Pod, '+ \
-                                'but VNF is not installed correctly as intended. Please correct the code and return the updated version by refering MOP again.\n'+str(second_test_result))['response']
+                            llm_response=chat.invoke(inform_message+second_test_result+request_message)['response']
             else:
                 # VM Creation failed
                 if logging_:
@@ -239,7 +262,6 @@ def multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,sy
                     #print(f'{_+2} try')
                     start_time = time.time()
                     if argparser.RAG and ('Ansible runner status:' in str(server_or_message) or 'but Pod got error: ' in str(server_or_message)):
-
                         # ToDo: currently consider only K8S. need to fix to consider OpenStack also.
                         error_start = check_log_error(str(server_or_message))
                         if error_start:
@@ -308,6 +330,7 @@ if __name__ == '__main__':
     argparser.add_argument('--max-limit', help= 'Max limit of MOPs to test', type=int, default=3)
     argparser.add_argument('--debate', action='store_true', help= 'multi-agent-debate')
     argparser.add_argument('--judge', action='store_true', help= 'judge LLM in RAG')
+    argparser.add_argument('--log-generating', action='store_true', help='Only for log data generating')
 
     argparser=argparser.parse_args()
     if argparser.OpenStack:
@@ -338,6 +361,8 @@ if __name__ == '__main__':
     
     logging_file = 'log.txt'
     logging_file_for_vnf = 'log_vnf.txt'
+    good_log_example=[]
+    bad_log_example = []
     with open(logging_file_for_vnf, 'w') as f:
         f.write('')
     model_list=[]
@@ -390,6 +415,10 @@ if __name__ == '__main__':
         if argparser.judge:
             judge_llm_model_name='llama3.3'
             judge_LLM = Ollama(model=judge_llm_model_name, num_ctx=num_ctx_list[judge_llm_model_name])
+    if argparser.log_generating:
+        if 'bad_log_example.json' in os.listdir('.'):
+            with open('bad_log_example.json', 'r') as f:
+                bad_log_example = json.load(f)
     all_mop_num = len(mop_list)
     first_create_success_num = {}
     first_config_success_num = {}
@@ -482,7 +511,8 @@ if __name__ == '__main__':
                 else:
                     test_result, server_or_message = test_creation_ansible_K8S(llm_response, vnf, model, vm_num[vnf], v1, 600)
                 spend_time[1] = time.time()-start_time
-                if test_result == True:
+                if test_result == 0:
+                    # TODO: OpenStack module still return 'True' if succeed.
                     if system_name=='OpenStack':
                         try:
                             server = conn.compute.wait_for_server(server_or_message)
@@ -497,7 +527,7 @@ if __name__ == '__main__':
                             continue
                     # VM creation success.
                     # Now, test the configuration
-                    print('creation success')
+                    # print('creation success')
                     if not already_success:
                         create_success_num[lang][model] += 1
                         already_success = True
@@ -514,13 +544,14 @@ if __name__ == '__main__':
                     if system_name=='OpenStack':
                         second_test_result = test_openstack_configuration(server_or_message, vnf, model, vm_num[vnf], conn, None)
                     if system_name=='Kubernetes':
-                        second_test_result = test_K8S_configuration(server_or_message, vnf, v1, namespace)
+                        second_test_result, second_message = test_K8S_configuration(server_or_message, vnf, v1, namespace)
                     spend_time[2] = time.time()-start_time
                     if system_name=='OpenStack':
                         conn.delete_server(server_or_message.id)
                     if system_name=='Kubernetes':
                         delete_pod(v1, server_or_message, namespace)
-                    if second_test_result == True:
+                    if second_test_result == 0:
+                        # TODO: OpenStack module still return 'True' if succeed.
                         process_time[model].append(spend_time)
                         success_num_by_vnf[vnf]['success_num'] += 1
                         config_success_num[lang][model] += 1
@@ -534,24 +565,47 @@ if __name__ == '__main__':
                         break
                     else:
                         # VM Config test failed.
-
-                        # Todo: add RAG here.
                         if logging_:
                             with open(logging_file, 'a') as f:
                                 f.write('Config test failled. Results:\n')
-                                f.write(str(second_test_result)+'\n')
+                                f.write(errorcode_dict[second_test_result]+'\n')
                         if _ < maximum_tiral-1:
                             start_time = time.time()
-                            if argparser.RAG and not 'It should return' in str(second_test_result):
-                                # VNF configuration related docs are not crawled yet. only StackOverflow
-                                if 'Error occurs' in str(second_test_result):
-                                    error_logs = '\n'.join(return_error_logs(str(second_test_result)))
-                                    retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_, vnf_name=vnf)
+                            inform_message= ''
+                            request_message=''
+                            assert(second_test_result in [2, 30, 31, 32, 33])
+                            if second_test_result == 2:
+                                second_test_result = second_message
+                            elif second_test_result == 31:
+                                second_message = "It doesn't seem to be set to variable for 'pod_name' and 'namespace' in the created pod. Modify it to set to variable."
+                            elif second_test_result == 32:
+                                if second_message:
+                                    second_message = f"After I run your code, the container '{second_message}' exited."
                                 else:
-                                    retrieved_texts=RAG.RAG_search(second_test_result, collection, embed_model, logging_, vnf_name=vnf)
+                                    second_message = "After I run your code, the container exited."                             
+                                request_message = "Please modify your code by adding 'sleep infinity' so that the container does not turn off. Please show me the updated version.\n"                        
+                            elif second_test_result == 30:
+                                inform_message = 'While configure VNF with your code, I got this error. \n'
+                                if argparser.log_generating:
+                                    bad_log_example.append(second_message)
+                            elif second_test_result == 33:
+                                container, error_code, error_message = second_message
+                                second_message = error_message
+                                inform_message = f"An error with error code {error_code} occurred in the container '{container}' while operating your code. It means "
+                                if argparser.log_generating:
+                                    bad_log_example.append(second_message)
+                            with open(logging_file, 'a') as f:
+                                f.write('Config test failled. Results:\n')
+                                f.write(second_message+'\n')
+                            if  argparser.RAG and second_test_result in [30, 33]:
+                                # VNF configuration related docs are not crawled yet. only StackOverflow                            
+                                retrieved_docs=RAG.RAG_search(second_message, collection, embed_model, logging_, vnf_name=vnf)
+                                retrieved_texts='And here are some related documents. Please refer to them.\n'
+                                for retrieved_doc in retrieved_docs:
+                                    retrieved_texts += retrieved_doc['text']+'\n'
                                 if argparser.judge:
                                     judge_result = judge_LLM.invoke(f'''Please determine whether the following text is related to this error message. 
-                                        The error message is {second_test_result}.\n The text to be checked is here. {retrieved_texts}\n Return ‘Yes’ if they are related, or ‘No’ if they are not.''')
+                                        The error message is {second_message}.\n The text to be checked is here. {retrieved_texts}\n Return ‘Yes’ if they are related, or ‘No’ if they are not.''')
                                     if logging_:
                                         with open(logging_file, 'a') as f:
                                             f.write('RAG results:\n')
@@ -559,42 +613,96 @@ if __name__ == '__main__':
                                             f.write ('Judge result:\n')
                                             f.write(judge_result+'\n')
                                     if 'yes' in judge_result.lower():
-                                        second_test_result= str(second_test_result) +  retrieved_texts
+                                        request_message +=  retrieved_texts
                                 else:
-                                    second_test_result= str(second_test_result) +  retrieved_texts
+                                    request_message +=  retrieved_texts
                                     if logging_:
                                         with open(logging_file, 'a') as f:
-                                            f.write ('RAG results:\n')
+                                            f.write ('RAG results:\n Distance: ')
+                                            f.write(' '.join([str(doc['distance']) for doc in retrieved_docs])+'\n')
                                             f.write(retrieved_texts+'\n')
+                            if request_message =='':
+                                request_message='Please correct your code and return the updated version by refering MOP again to configure VNF correctly.\n'
                             if system_name=='OpenStack':
                                 llm_response=chat.invoke('When I run your code, I can successfully create VM, '+ \
                                     'but VNF configuration is failed. I got this error message. Please correct the code and return the updated version.\n'+str(second_test_result))['response']
                             if system_name == 'Kubernetes':
-                                llm_response=chat.invoke('When I run your code, I can successfully create Pod, '+ \
-                                    'but VNF is not installed correctly as intended. Please correct the code and return the updated version by refering MOP again.\n'+str(second_test_result))['response']
+                                llm_response=chat.invoke(inform_message+second_message+request_message)['response']
                 else:
                     # VM Creation failed
                     if logging_:
                         with open(logging_file, 'a') as f:
                             f.write('VM Creation test failled. Results:\n')
-                            f.write(str(server_or_message)+'\n')
+                            f.write(errorcode_dict[test_result]+'\n')
                     if _ < maximum_tiral-1:
                         #print(test_result)
                         #print(f'{_+2} try')
+                            
+                        #error code(test_result) should be one of [1,10, 11, 12, 14, 20, 21, 22, 23, 31, 41, 43, 51, 90,91 ]
+                        assert(test_result in [1,10, 11, 12, 14, 20, 21, 22, 23, 31, 41, 43, 51, 90,91])
+                        inform_message = ''
+                        error_message=''
+                        request_message= ''
+                        if test_result == 1:
+                            request_message = f"I can't find {form} code in your response. Please modify it."
+                        elif test_result == 10:
+                            request_message = f"I failed to parse your {form} code. Please check the format and modify it."
+                        elif test_result == 11:
+                            server_or_message= "Your YAML code runs on localhost or Kubernetes nodes, but there's no task to perform there. Please update it to run only inside Kubernetes."
+                        elif test_result == 12:
+                            inform_message = "I found infinite loop in your code. "
+                            request_message = "Please modify your code to avoid infinite loop."
+                        elif test_result == 14:
+                            inform_message = "I can not find 'create_pod' function in your code. "
+                            request_message = 'Please check and modify your code.'
+                            if server_or_message:
+                                error_message = server_or_message
+                        elif test_result == 20: #RAG
+                            inform_message = 'While running your code, Pod error occured. Here are the logs from pods.\n'
+                            error_message = server_or_message
+                        elif test_result == 21: 
+                            inform_message = f'While running your code, Pod fell into {server_or_message} phase.\n'
+                        elif test_result == 22:
+                            inform_message = 'While running your code in my local machine, I got this exception.\n'+ str(server_or_message)
+                        elif test_result == 23:#RAG
+                            status, ansible_output = server_or_message
+                            inform_message = 'While running your code, Ansible runner result is ' + status + '.\n'
+                            error_message = str(ansible_output)
+                        elif test_result == 31:
+                            request_message = "It doesn't seem to be set to variable for 'pod_name' and 'namespace' in the created pod. Modify it to set to variable."
+                        elif test_result == 41:
+                            request_message = 'There was a task that was skipped due to an incorrect host name. Please correct the host name to use variable.'
+                        elif test_result == 43:
+                            print('43 error occured. somthing wrong?')
+                            inform_message = 'I got exception while finding pod in Kubernetes.'
+                            request_message = 'Please check the pod name and namespace are using variable, and correct it.'
+                        elif test_result == 51:#RAG
+                            inform_message = "When I run your code, 'create_pod' function returned False. And here are stdout from the function.\n"
+                            request_message = 'Please check your code and modify it run well.'
+                            error_message = server_or_message
+                        elif test_result == 90:#RAG
+                            inform_message = 'While running your code, Ansible runner takes too long time to run. It seems that your code is not running well.'
+                            error_message = server_or_message
+                            request_message = 'Please check your code and modify it to run well.'
+                        elif test_result == 91:
+                            inform_message = "While running your code, container didn't get ready for a long time. It seems that your code is not running well."
+                            request_message = 'Please check your code and modify it to run well.'
                         start_time = time.time()
-                        if argparser.RAG and ('Ansible runner status:' in str(server_or_message) or 'but Pod got error: ' in str(server_or_message)):
-
-                            # ToDo: currently consider only K8S. need to fix to consider OpenStack also.
-                            error_start = check_log_error(str(server_or_message))
+                        if argparser.log_generating and not error_message =='':
+                            bad_log_example.append(error_message)
+                        if argparser.RAG and not error_message=='':
+                            # TODO: currently consider only K8S. need to fix to consider OpenStack also.                            
+                            # From now on, RAG will find where is error.
+                            '''error_start = check_log_error(str(server_or_message)) 
                             if error_start:
                                 error_logs = '\n'.join(return_error_logs(str(server_or_message)))
                                 retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_, vnf_name=vnf)
                             else:
-                                retrieved_texts=RAG.RAG_search(server_or_message, collection, embed_model, logging_, vnf_name=vnf)
-
+                                retrieved_texts=RAG.RAG_search(server_or_message, collection, embed_model, logging_, vnf_name=vnf)'''
+                            retrieved_texts=RAG.RAG_search(error_message, collection, embed_model, logging_, vnf_name=vnf)
                             if argparser.judge:
                                 judge_result = judge_LLM.invoke(f'''Please determine whether the following text is related to this error message. 
-                                    The error message is {server_or_message}.\n The text to be checked is here. {retrieved_texts}\n Return ‘Yes’ if they are related, or ‘No’ if they are not.''')
+                                    The error message is {error_message}.\n The text to be checked is here. {retrieved_texts}\n Return ‘Yes’ if they are related, or ‘No’ if they are not.''')
                                 if logging_:
                                     with open(logging_file, 'a') as f:
                                         f.write('RAG results:\n')
@@ -602,27 +710,32 @@ if __name__ == '__main__':
                                         f.write ('Judge result:\n')
                                         f.write(judge_result+'\n')
                                 if 'yes' in judge_result.lower():
-                                    server_or_message= str(server_or_message) +  retrieved_texts
+                                    request_message += 'And here are some related docs for error message.\n'+ retrieved_texts
                             else:
-                                server_or_message= str(server_or_message) +  retrieved_texts
+                                request_message += 'And here are some related docs for error message.\n'+ retrieved_texts
                                 if logging_:
                                     with open(logging_file, 'a') as f:
                                         f.write ('RAG results:\n')
                                         f.write(retrieved_texts+'\n')
-                        if form=='Python' and 'has no attribute ' in str(server_or_message):
+                        if request_message =='':
+                            request_message='Please correct your code and return the updated version by refering MOP again to configure VNF correctly.\n'
+                        '''if form=='Python' and 'has no attribute ' in str(server_or_message):
                             func_name = str(server_or_message).split("'")[3]
                             #print(func_name)
                             llm_response=chat.invoke(f"Your code doesn't have '{func_name}' function. Please put the code inside it. Also, it should take 'pod_name', 'namespace', and 'image_name' as input and return True if configuration succeed. Don't use the other function name.")['response']
                         elif form=='Python' and 'positional arguments but 3 were given' in str(server_or_message):
                             llm_response=chat.invoke(f"'create_pod' function should take 'pod_name', 'namespace', and 'image_name' as input and return True if configuration succeed.")['response']
-                        else:
-                            llm_response=chat.invoke('When I run your code, I got this error message, and failed to create VM. Please correct the code and return the updated version.\n'+str(server_or_message))['response']
+                        else:'''
+                        llm_response=chat.invoke(inform_message+error_message+request_message)['response']
                 if system_name=='OpenStack':
                     # Delete all VMs created after the target time
                     delete_vms_after(conn, target_datetime)
                 elif system_name=='Kubernetes':
                     delete_all_pods(v1, apps_v1)
         # change next print operations to write in the logging_file
+        if argparser.log_generating:
+            with open('bad_log_example.json', 'w') as f:
+                json.dump(bad_log_example, f)
         if logging_:
             with open(logging_file, 'a') as f:
                 f.write('Middle report\n')

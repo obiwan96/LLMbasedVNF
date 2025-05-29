@@ -4,22 +4,23 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from sentence_transformers import SentenceTransformer
 import chromadb
 import uuid
-from docs_crawler import delete_overlap
 
 logging_file_rag = 'log_rag.txt'
-def RAG_init(db_names): 
+def RAG_init(db_names, embed_model='all-MiniLM-L6-v2'): 
     # db_names msut me a list of db_names. ex) ['kubernetes_docs.db']
     collection_name="documents"
     chroma_client = chromadb.Client()
     if collection_name in chroma_client.list_collections():
         chroma_client.delete_collection(name=collection_name)    
     collection = chroma_client.create_collection(collection_name)
-    #embed_model = SentenceTransformer('all-MiniLM-L6-v2')
-    # Let's use INF-Retriever-v1 model, which shows higher performance in coding domain
-    # But after change, initiation becomes much slower.
-    embed_model = SentenceTransformer("infly/inf-retriever-v1", trust_remote_code=True)
-    embed_model.max_seq_length = 512 # embedding model get title and question, so 512 is enough.
-
+    if embed_model=='infly':
+        # Let's use INF-Retriever-v1 model, which shows higher performance in coding domain
+        # But after change, initiation becomes much slower.
+        embed_model = SentenceTransformer("infly/inf-retriever-v1", trust_remote_code=True)
+        embed_model.max_seq_length = 512 # embedding model get title and question, so 512 is enough.
+    else:
+        embed_model = SentenceTransformer(embed_model)
+    
     documents = []
     for db_name in db_names:
         conn = sqlite3.connect(db_name)
@@ -103,6 +104,7 @@ def RAG_search(query, collection, embed_model, logging_=False, n_results=1, vnf_
 
 if __name__ == '__main__':
     db_list=['kubernetes_docs.db', 'ansible_docs.db', 'stackoverflow_docs.db']
+    from docs_crawler import delete_overlap
     for db_name in db_list:
         delete_overlap(db_name)
     collection, embed_model = RAG_init(db_list)
