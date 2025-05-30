@@ -4,15 +4,41 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from sentence_transformers import SentenceTransformer
 import chromadb
 import uuid
+import re
 
 logging_file_rag = 'log_rag.txt'
-def RAG_init(db_names, embed_model='all-MiniLM-L6-v2'): 
+
+def remove_excess_escapes(log: str) -> str:
+    # backslash remove
+    log = re.sub(r'\\{2,}', r'\\', log)
+    try:
+        log = bytes(log, 'utf-8').decode('unicode_escape')
+    except Exception:
+        pass
+    return log
+
+def clean_garbage_chars(text: str) -> str:
+    # some ascii code crack. remove
+    # 1. Non-breaking space, unexpected Latin characters
+    text = text.replace('\xa0', ' ')  # NBSP 제거
+    text = re.sub(r'[^\x00-\x7F]+', ' ', text)  # ASCII 이외 문자 제거 (or replace with ' ')
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+def log_pre_processing(log):
+    log = remove_excess_escapes(log)
+    lines = log.split('\n')
+    pre_processed_log = []
+    for line in lines:
+        if any(skip in line for skip in ['[WARNING]', 'PLAY ', 'TASK ', 'RECAP', 'ok=', 'changed=']):
+            continue
+        pre_processed_log.append(clean_garbage_chars(line.strip()))
+    return '\n'.join(pre_processed_log)
+
+def RAG_init(db_names, embed_model='all-MiniLM-L6-v2', new = False): 
     # db_names msut me a list of db_names. ex) ['kubernetes_docs.db']
-    collection_name="documents"
+    collection_name="documents-"+embed_model
     chroma_client = chromadb.Client()
-    if collection_name in chroma_client.list_collections():
-        chroma_client.delete_collection(name=collection_name)    
-    collection = chroma_client.create_collection(collection_name)
     if embed_model=='infly':
         # Let's use INF-Retriever-v1 model, which shows higher performance in coding domain
         # But after change, initiation becomes much slower.
@@ -20,6 +46,13 @@ def RAG_init(db_names, embed_model='all-MiniLM-L6-v2'):
         embed_model.max_seq_length = 512 # embedding model get title and question, so 512 is enough.
     else:
         embed_model = SentenceTransformer(embed_model)
+    if collection_name in chroma_client.list_collections():
+        if new:
+            chroma_client.delete_collection(name=collection_name)
+        else:
+            collection = chroma_client.get_collection(name=collection_name)
+            return collection, embed_model
+    collection = chroma_client.create_collection(collection_name)
     
     documents = []
     for db_name in db_names:
@@ -60,8 +93,10 @@ def RAG_init(db_names, embed_model='all-MiniLM-L6-v2'):
 def RAG_search(query, collection, embed_model, logging_=False, n_results=1, vnf_name=None):
     # vector search only now.
     # Todo: Graph based search
-    if 'exit code' in str(query):
-        return ''
+    '''if 'exit code' in str(query):
+        return '' '''# It returned nothing if container exit code is delivered. not need from now on. it's related to errorcode with 33.    
+
+    query = log_pre_processing(query)
     query_embedding = embed_model.encode(str(query)).tolist()
 
     results = collection.query(query_embeddings=[query_embedding], n_results=n_results)
@@ -101,6 +136,18 @@ def RAG_search(query, collection, embed_model, logging_=False, n_results=1, vnf_
     ##### TODO: change the return format, so need to change the main.py ##########
     return retrieved_texts
 
+def color_text(text, color='red'):
+    colors = {
+        'red': '\033[91m',
+        'green': '\033[92m',
+        'yellow': '\033[93m',
+        'blue': '\033[94m',
+        'magenta': '\033[95m',
+        'cyan': '\033[96m',
+        'white': '\033[97m',
+        'reset': '\033[0m'
+    }
+    return f"{colors.get(color, colors['reset'])}{text}{colors['reset']}"
 
 if __name__ == '__main__':
     db_list=['kubernetes_docs.db', 'ansible_docs.db', 'stackoverflow_docs.db']
@@ -108,12 +155,12 @@ if __name__ == '__main__':
     for db_name in db_list:
         delete_overlap(db_name)
     collection, embed_model = RAG_init(db_list)
-    print('RAG init end')
+    print(color_text('RAG init end', 'red'))
     while True:
         query = input('Enter your query: ')
         if query.lower() == 'exit':
             break
         result = RAG_search(query, collection, embed_model)
         for res in result:
-            print(f"Title: {res['title']}, Distance: {res['distance']}, DB Name: {res['db_name']}")
+            print(color_text(f"Title: {res['title']}, Distance: {res['distance']}, DB Name: {res['db_name']}", 'green') )
             print(f"Text: {res['text']}\n")

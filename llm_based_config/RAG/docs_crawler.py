@@ -7,6 +7,8 @@ import argparse
 import json
 import os
 from stackapi import StackAPI
+import sys
+
 
 def create_table(db_name):
     conn = sqlite3.connect(db_name)
@@ -325,6 +327,11 @@ def delete_overlap(db_name):
     conn.commit()
     conn.close()
 
+def input_several_lines(prompt):
+    print("\033[92m"+prompt+' Input break with ctrl + D. \033[0m')
+    text = sys.stdin.read()
+    return text
+
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--openstack', action='store_true', help='Crawl OpenStack docs')
@@ -335,8 +342,46 @@ if __name__=='__main__':
     parser.add_argument('--all', action='store_true', help='Crawl all docs')
     parser.add_argument('--take-up', action='store_true', help='Take up the last crawl state')
     parser.add_argument('--logging', action='store_true', help='Logging or not')
+    parser.add_argument('--manual-add', action='store_true', help='Manually add documents to the database')
     
     args = parser.parse_args()
+    if args.manual_add:
+        db_name = input("\033[91mEnter the database name ('open', 'k8s', 'ansible', 'stack') or type 'exit' to quit: \033[0m")
+        if db_name.lower() == 'open':
+            db_name = 'openstack_docs.db'
+        elif db_name.lower() == 'k8s':
+            db_name = 'kubernetes_docs.db'
+        elif db_name.lower() == 'ansible':
+            db_name = 'ansible_docs.db'
+        elif db_name.lower() == 'stack':
+            db_name = 'stackoverflow_docs.db'
+        else:
+            print("\033[91mInvalid database name. Exiting.\033[0m")
+            sys.exit(1)
+        conn = sqlite3.connect(db_name)
+        cursor = conn.cursor()
+        while True:
+            title = input("\033[92mEnter the title of the document: \033[0m")
+            if title.lower() == 'exit':
+                conn.close()
+                break
+            if db_name == 'stackoverflow_docs.db':
+                question = input_several_lines("Enter the question of the document: ")
+            else:
+                url = input("\033[92mEnter the URL of the document: \033[0m")
+            content = input_several_lines("Enter the content of the document: ")
+            if db_name == 'stackoverflow_docs.db':
+                cursor.execute('INSERT INTO documents (title, question, content) VALUES (?, ?, ?)', (title, question, content))
+            else:
+                cursor.execute('INSERT INTO documents (url, title, content) VALUES (?, ?, ?)', (url, title, content))
+            confirm = input("\033[92mDo you really want to commit? (y/n): \033[0m")
+            if confirm.lower() != 'y':
+                print("\033[91mOperation cancelled.\033[0m")
+                conn.close()
+                continue
+            conn.commit()
+            print(f"\033[91mDocument added to {db_name}.\033[0m")
+        conn.close()
     if args.openstack or args.all:
         # OpenStack docs crawling
         conn, cursor = create_table('openstack_docs.db')

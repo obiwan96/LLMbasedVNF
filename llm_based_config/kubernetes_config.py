@@ -338,7 +338,7 @@ def run_config(v1, pod_name, namespace, input, output, exactly=False):
     return response
 
 def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
-    exit_code_dict = {1 : 'Generral error, likes script failure, invalid arguments, etc.', 
+    exit_code_dict = {1 : 'General error, likes script failure, invalid arguments, etc.', 
                       126: 'Command found but not executable, permission problem or command is not executable',
                       127: 'Command not found, invalid command or not in PATH',
                       128: 'Invalid exit argument, invalid argument to exit',
