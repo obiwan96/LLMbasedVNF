@@ -377,7 +377,6 @@ if __name__=='__main__':
             confirm = input("\033[92mDo you really want to commit? (y/n): \033[0m")
             if confirm.lower() != 'y':
                 print("\033[91mOperation cancelled.\033[0m")
-                conn.close()
                 continue
             conn.commit()
             print(f"\033[91mDocument added to {db_name}.\033[0m")

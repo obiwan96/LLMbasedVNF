@@ -1,0 +1,1028 @@
+apt-add-repository -y ppa:ondrej/haproxy
+apt update
+apt install -y haproxy
+sed -i 's/# daemon \/usr\/sbin\/haproxy\//daemon \/usr\/sbin\/haproxy --user haproxy --group haproxy/' /etc/default/haproxy
+systemctl start haproxy
+systemctl enable haproxy
+echo "frontend http_front
+bind *:80
+default_backend http_back
+backend http_back
+server web1 <target-server-ip>:<target-server-port> check" > /etc/haproxy/haproxy.cfg
+haproxy -f /etc/haproxy/haproxy.cfg -p /run/haproxy.pid -Dqf & sleep infinity
+'", "reason": "Unprocessable Entity"}
+core.PodSpec{
+Volumes: {{Name: "kube-api-access-nr5cp", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+InitContainers: nil,
+Containers: []core.Container{
+{
+- Name: "vnf-container",
++ Name: "ndpi-container",
+Image: "dokken/ubuntu-20.04",
+Command: {"/bin/bash", "-c"},
+- Args: []string{
+- (
+- """
+- #!/bin/bash
+- # Update package lists
+- apt-get update
+-
+- # Install necessary packages
+- apt-get install -y iptables
+- # Flush existing rules
+- iptables -F
+- # Set default policies to DROP for INPUT and FORWARD chains.
+- iptables -P INPUT DROP
+- iptables -P FORWARD DROP
+- # Allow loopback interface traffic in the INPUT chain.
+- iptables -A INPUT -i lo -j ACCEPT
+- # Allow established connections in the INPUT chain.
+- iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+- # Allow traffic from the allowed subnet in the INPUT chain.
+- iptables -A INPUT -s 10.244.0.0/16 -j ACCEPT
+- # Log dropped packets (optional).
+- iptables -A INPUT -j LOG --log-prefix "IPTables-Dropped: " --log-level 7
+- sleep infinity
+- ),
+- },
++ Args: []string{
++ (
++ """
++ apt update && apt install -y build-essential git cmake libpcap-dev
++ git clone https://github.com/ntop/nDPI.git /tmp/nDPI
++ mkdir -p /tmp/nDPI/build
++ cd /tmp/nDPI/build
++ cmake ..
++ make
++ make install
++ echo "subnet = 10.244.0.0/16" > /etc/ndpi.conf
++ echo "nameserver 10.99.30.112" > /etc/resolv.conf
++ ndpiReader -i eth0 & sleep infinity
++ ),
++ },
+WorkingDir: "",
+Ports: nil,
+EnvFrom: nil,
+Env: nil,
+Resources: core.ResourceRequirements{
+- Limits: nil,
++ Limits: core.ResourceList{
++ s"cpu": {i: resource.int64Amount{value: 2}, s: "2", Format: "DecimalSI"},
++ s"memory": {i: resource.int64Amount{value: 4294967296}, s: "4Gi", Format: "BinarySI"},
+- Requests: nil,
++ Requests: core.ResourceList{
++ s"cpu": {i: resource.int64Amount{value: 1}, s: "1", Format: "DecimalSI"},
++ s"memory": {i: resource.int64Amount{value: 2147483648}, s: "2Gi", Format: "BinarySI"},
+Claims: nil,
+},
+ResizePolicy: nil,
+RestartPolicy: nil,
+- VolumeMounts: []core.VolumeMount{
+- {
+- Name: "kube-api-access-nr5cp",
+- ReadOnly: true,
+- MountPath: "/var/run/secrets/kubernetes.io/serviceaccount",
++ VolumeMounts: nil,
+VolumeDevices: nil,
+LivenessProbe: nil,
+... // 10 identical fields
+EphemeralContainers: nil,
+RestartPolicy: "Always",
+... // 28 identical fields
+}
+","field":"spec"}]},"code":422}
+Volumes: {{Name: "kube-api-access-btmsm", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+Name: "firewall-container",
+- apt-get update && apt-get install -y iptables
+- # Allow loopback traffic
+- # Allow established sessions
+- # Allow SSH (port 22)
+- iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+- # Allow HTTP (port 80)
+- iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+- # Drop all other traffic
+- iptables -A INPUT -j DROP
++ #!/bin/bash
++ # Flush existing rules
++ iptables -F
++ # Allow loopback traffic
++ iptables -A INPUT -i lo -j ACCEPT
++ # Allow established sessions
++ iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
++ # Allow SSH
++ iptables -A INPUT -p tcp --dport 22 -j ACCEPT
++ # Allow HTTP
++ iptables -A INPUT -p tcp --dport 80 -j ACCEPT
++ # Drop all other traffic
++ iptables -A INPUT -j DROP
++ sleep infinity
+Limits: core.ResourceList{
+- s"cpu": {i: resource.int64Amount{value: 500, scale: -3}, s: "500m", Format: "DecimalSI"},
+- s"memory": {i: resource.int64Amount{value: 536870912}, Format: "BinarySI"},
++ s"memory": {i: resource.int64Amount{value: 1073741824}, s: "1Gi", Format: "BinarySI"},
+Requests: core.ResourceList{
+- s"cpu": {i: resource.int64Amount{value: 100, scale: -3}, s: "100m", Format: "DecimalSI"},
++ s"cpu": {i: resource.int64Amount{value: 5, scale: -1}, Format: "DecimalSI"},
+- s"memory": {i: resource.int64Amount{value: 268435456}, Format: "BinarySI"},
++ s"memory": {i: resource.int64Amount{value: 536870912}, Format: "BinarySI"},
+- Name: "kube-api-access-btmsm",
+Volumes: {{Name: "kube-api-access-b6xkp", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- Name: "firewall-container",
++ Name: "cnf-container",
+- # Allow SSH
+- # Allow HTTP
++ apt-get update && apt-get install -y iptables
++ # Configure firewall using iptables (replace XXXX with the specific ports allowed)
++ # Ensure container stays alive with sleep command
+- s"cpu": {i: resource.int64Amount{value: 1}, s: "1", Format: "DecimalSI"},
+- s"memory": {i: resource.int64Amount{value: 1073741824}, s: "1Gi", Format: "BinarySI"},
+- Name: "kube-api-access-b6xkp",
+... // 4 identical fields
+TerminationMessagePolicy: "File",
+ImagePullPolicy: "Always",
+SecurityContext: &core.SecurityContext{
+Capabilities: nil,
+- Privileged: &true,
++ Privileged: &false,
+SELinuxOptions: nil,
+WindowsOptions: nil,
+- RunAsUser: nil,
++ RunAsUser: &0,
+RunAsGroup: nil,
+RunAsNonRoot: nil,
+- ReadOnlyRootFilesystem: nil,
++ ReadOnlyRootFilesystem: &true,
+- AllowPrivilegeEscalation: nil,
++ AllowPrivilegeEscalation: &false,
+ProcMount: nil,
+SeccompProfile: nil,
+Stdin: false,
+StdinOnce: false,
+TTY: false,
+add-apt-repository ppa:ntop/ntop
+apt install -y ntopng
+echo "-i=eth0" >> /etc/ntopng/ntopng.conf
+echo "--report-protocols" >> /etc/ntopng/ntopng.conf
+ntopng -i eth0 --report-protocols & sleep infinity
+"],"command":["/bin/bash","-c"],"env":[{"name":"NTOPNG_INTERFACE","value":"eth0"},{"name":"NTOPNG_REPORT_PROTOCOLS","value":"true"}],"image":"ntop/ntop","name":"ntopng","ports":{"containerPort":3000}},{"args":["#!/bin/bash
+.... (Script for configuring iptables to block traffic except subnets within `10.244.0.0/16`)
+Volumes: {{Name: "kube-api-access-2h6h4", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+Name: "ndpi-container",
+- # Set the DNS server explicitly to ensure network reachability
+- echo "nameserver 10.99.30.112" > /etc/resolv.conf
+- # Retry mechanism for apt update and install commands
+- until apt-get update; do sleep 5; done
+- apt-get install -y build-essential git cmake libpcap-dev
+- # Clone nDPI repository
+- git clone https://github.com/ntop/nDPI.git /tmp/nDPI
+- # Build and install nDPI
+- mkdir -p /tmp/nDPI/build
+- cd /tmp/nDPI/build
+- cmake ..
+- make
+- make install
+- # Configure ndpi.conf to block traffic except 10.244.0.0/16
+- echo "subnet = 10.244.0.0/16" > /etc/ndpi.conf
+- # Start nDPI in background and keep the container running with sleep infinity
+- ndpiReader -i eth0 -b &
++ echo "subnet = 192.168.1.0/24" > /etc/ndpi.conf
++ ndpiReader -i eth0 -s 192.168.1.0/24 & sleep infinity
+... // 3 identical fields
+- Name: "kube-api-access-2h6h4",
+Volumes: {{Name: "kube-api-access-5qms6", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+Name: "suricata-container",
+- apt-get update --fix-missing &&
+- apt-get install -y software-properties-common &&
+- add-apt-repository ppa:oisf/suricata-stable &&
+- apt-get install -y suricata &&
+- sed -i 's/^#rule-files:/rule-files:/g' /etc/suricata/suricata.yaml &&
+- sed -i '/^# - suricata.rules/a\ - suricata.rules' /etc/suricata/suricata.yaml &&
+- suricata -c /etc/suricata/suricata.yaml --interface=eth0 &
++ apt update && apt install -y software-properties-common
++ add-apt-repository ppa:ondrej/suricata -y
++ apt update && apt install -y suricata
++ echo "subnet = 192.168.1.0/24" > /etc/suricata/suricata.yaml
++ suricata -c /etc/suricata/suricata.yaml -i eth0 & sleep infinity
+- Name: "kube-api-access-5qms6",
+Volumes: {{Name: "kube-api-access-v2qg6", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- Name: "ntopng",
+Command: []string{
+"/bin/bash",
+"-c",
+- apt update && apt install -y software-properties-common
+- add-apt-repository ppa:ntop/ntop
+- apt update
+- apt install -y ntopng
+- echo "-i=eth0" >> /etc/ntopng/ntopng.conf
+- echo "--http-port=3000" >> /etc/ntopng/ntopng.conf
+- echo "--report-protocols" >> /etc/ntopng/ntopng.conf
+- ntopng -i eth0 --http-port=3000 --report-protocols &
+- Args: nil,
++ echo "nameserver 10.100.80.140" > /etc/resolv.conf
+- Ports: []core.ContainerPort{{ContainerPort: 3000, Protocol: "TCP"}},
++ Ports: nil,
+- s"cpu": {i: resource.int64Amount{value: 250, scale: -3}, s: "250m", Format: "DecimalSI"},
+- Name: "kube-api-access-v2qg6",
+- SecurityContext: nil,
++ SecurityContext: &core.SecurityContext{Privileged: &true},
+Volumes: {{Name: "kube-api-access-58t25", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- Name: "mycontainer",
++ Name: "ntopng",
+- apt-get update && apt-get install -y iputils-ping
+- echo "Setting up the container..."
+- # Add your VNF setup commands here. For example:
+- # ./configure && make && make install
++ add-apt-repository ppa:ntop/ntop
++ apt update
++ apt install -y ntopng
++ echo "-i=eth0" >> /etc/ntopng/ntopng.conf
++ echo "--report-protocols" >> /etc/ntopng/ntopng.conf
++ ntopng -i eth0 --report-protocols & sleep infinity
+- Name: "kube-api-access-58t25",
+TerminationGracePeriodSeconds: &30,
+ActiveDeadlineSeconds: nil,
+- DNSPolicy: "ClusterFirst",
++ DNSPolicy: "None",
+NodeSelector: nil,
+ServiceAccountName: "default",
+... // 12 identical fields
+Priority: &0,
+PreemptionPolicy: &"PreemptLowerPriority",
+- DNSConfig: nil,
++ DNSConfig: &core.PodDNSConfig{Nameservers: []string{"10.99.30.112"}},
+ReadinessGates: nil,
+RuntimeClassName: nil,
+... // 6 identical fields
+Volumes: {{Name: "kube-api-access-sngkz", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- apt-get update && apt-get install -y build-essential git cmake libpcap-dev
+- cd /tmp/nDPI
+- mkdir -p build
+- cd build
+- echo "[ndpi]" > /etc/ndpi.conf
+- echo "subnet = 192.168.1.0/24" >> /etc/ndpi.conf
+- ndpiReader -i eth0 -s 192.168.1.0/24 & sleep infinity
+- Name: "kube-api-access-sngkz",
+Volumes: {{Name: "kube-api-access-n84tc", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- apt update && apt install -y build-essential git cmake libpcap-dev
+- echo "subnet = 192.168.1.0/24" > /etc/ndpi.conf
++ apt update && DEBIAN_FRONTEND=noninteractive apt install -y build-essential git cmake libpcap-dev
++ cd /tmp/nDPI
++ mkdir -p build && cd build
++ cmake .. && make && sudo make install
++ echo "subnet = 192.168.1.0/24" | sudo tee /etc/ndpi.conf > /dev/null
++ echo "nameserver 10.99.30.112" | sudo tee /etc/resolv.conf > /dev/null
++ ndpiReader -i eth0 -s 192.168.1.0/24 &
+- Name: "kube-api-access-n84tc",
+Volumes: {{Name: "kube-api-access-2pfmf", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- # Update package list and install iptables
+- iptables -P OUTPUT ACCEPT
+- # Allow specific ports (22 and 80) in the INPUT chain.
+- # Keep the container running indefinitely.
++
++ # Install necessary tools
++ # Set default policies to DROP for INPUT and FORWARD chains.
++ iptables -P INPUT DROP
++ iptables -P FORWARD DROP
++ # Allow loopback interface traffic in the INPUT chain.
++ # Allow established connections in the INPUT chain.
++ # Allow SSH port 22
++ # Allow HTTP port 80
++ # Log dropped packets (optional).
++ iptables -A INPUT -j LOG --log-prefix "IPTables-Dropped: " --log-level 7
+- Limits: core.ResourceList{
+- s"memory": {i: resource.int64Amount{value: 2147483648}, s: "2Gi", Format: "BinarySI"},
++ Limits: nil,
+- Requests: core.ResourceList{
++ Requests: nil,
+- Name: "kube-api-access-2pfmf",
+Volumes: {{Name: "kube-api-access-x58bn", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- Name: "ndpi-container",
+Image: "nginx",
+- ndpiReader -i eth0 -s 192.168.1.0/24 -p 22,80 & sleep infinity
++ Args: nil,
+- Ports: nil,
++ Ports: []core.ContainerPort{{ContainerPort: 3000, Protocol: "TCP"}},
+- Env: nil,
++ Env: []core.EnvVar{
++ {Name: "NTOPNG_INTERFACE", Value: "eth0"},
++ {Name: "NTOPNG_REPORT_PROTOCOLS", Value: "true"},
+- s"cpu": {i: resource.int64Amount{value: 2}, s: "2", Format: "DecimalSI"},
+- s"memory": {i: resource.int64Amount{value: 4294967296}, s: "4Gi", Format: "BinarySI"},
+- Name: "kube-api-access-x58bn",
+- SecurityContext: &core.SecurityContext{Privileged: &true},
++ SecurityContext: nil,
++ Name: "firewall-container",
++ apt update && apt install -y iptables
++ iptables -P OUTPUT ACCEPT
++ # Allow traffic on port 22 (SSH) and port 80 (HTTP)
++ # Keep the container running indefinitely.
+Volumes: {{Name: "kube-api-access-x56ms", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- # Manually set the DNS server to 10.99.30.112
+- ndpiReader -i eth0 & sleep infinity
+- Name: "kube-api-access-x56ms",
+Volumes: {{Name: "kube-api-access-zcq4s", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
++ Name: "nDPI-container",
+- Name: "kube-api-access-zcq4s",
+sed.
+kB]
+Ign:16 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 binutils-common amd64 2.34-6ubuntu1.11
+Ign:17 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libbinutils amd64 2.34-6ubuntu1.11
+Ign:18 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libctf-nobfd0 amd64 2.34-6ubuntu1.11
+Ign:19 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libctf0 amd64 2.34-6ubuntu1.11
+Ign:20 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 binutils-x86-64-linux-gnu amd64 2.34-6ubuntu1.11
+Ign:21 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 binutils amd64 2.34-6ubuntu1.11
+Ign:22 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libc-dev-bin amd64 2.31-0ubuntu9.18
+Ign:23 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 linux-libc-dev amd64 5.4.0-216.236
+Ign:25 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libc6-dev amd64 2.31-0ubuntu9.18
+Ign:26 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 gcc-9-base amd64 9.4.0-1ubuntu1~20.04.2
+Ign:30 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 cpp-9 amd64 9.4.0-1ubuntu1~20.04.2
+Ign:32 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libcc1-0 amd64 10.5.0-1ubuntu1~20.04
+Ign:33 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libgomp1 amd64 10.5.0-1ubuntu1~20.04
+Ign:34 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libitm1 amd64 10.5.0-1ubuntu1~20.04
+Ign:35 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libatomic1 amd64 10.5.0-1ubuntu1~20.04
+Ign:36 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libasan5 amd64 9.4.0-1ubuntu1~20.04.2
+Ign:37 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 liblsan0 amd64 10.5.0-1ubuntu1~20.04
+Ign:38 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libtsan0 amd64 10.5.0-1ubuntu1~20.04
+Ign:39 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libubsan1 amd64 10.5.0-1ubuntu1~20.04
+Ign:40 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libquadmath0 amd64 10.5.0-1ubuntu1~20.04
+Ign:41 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libgcc-9-dev amd64 9.4.0-1ubuntu1~20.04.2
+Ign:42 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 gcc-9 amd64 9.4.0-1ubuntu1~20.04.2
+Ign:44 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libstdc++-9-dev amd64 9.4.0-1ubuntu1~20.04.2
+Ign:45 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 g++-9 amd64 9.4.0-1ubuntu1~20.04.2
+Err:47 http://archive.ubuntu.com/ubuntu focal/main amd64 make amd64 4.2.1-1.2
+Ign:48 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libdpkg-perl all 1.19.7ubuntu3.2
+Ign:50 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 dpkg-dev all 1.19.7ubuntu3.2
+Ign:53 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libarchive13 amd64 3.4.0-2ubuntu1.5
+Ign:62 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libpackagekit-glib2-18 amd64 1.1.13-2ubuntu1.1
+Ign:63 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 gir1.2-packagekitglib-1.0 amd64 1.1.13-2ubuntu1.1
+Ign:64 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libcurl3-gnutls amd64 7.68.0-1ubuntu2.25
+Ign:66 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 git-man all 1:2.25.1-1ubuntu3.14
+Ign:67 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 git amd64 1:2.25.1-1ubuntu3.14
+Ign:68 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libproxy1v5 amd64 0.4.15-10ubuntu1.2
+Ign:69 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 glib-networking-common all 2.64.2-1ubuntu0.1
+Ign:70 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 glib-networking-services amd64 2.64.2-1ubuntu0.1
+Ign:72 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 glib-networking amd64 2.64.2-1ubuntu0.1
+Ign:76 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libsoup2.4-1 amd64 2.70.0-1ubuntu0.5
+Ign:80 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libglib2.0-bin amd64 2.64.6-1~ubuntu20.04.9
+Ign:81 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libgstreamer1.0-0 amd64 1.16.3-0ubuntu1.2
+Ign:84 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libpolkit-agent-1-0 amd64 0.105-26ubuntu1.3
+Ign:86 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 policykit-1 amd64 0.105-26ubuntu1.3
+Ign:87 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 packagekit amd64 1.1.13-2ubuntu1.1
+Ign:88 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 packagekit-tools amd64 1.1.13-2ubuntu1.1
+Ign:91 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 python3-idna all 2.8-1ubuntu0.1
+Ign:92 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 python3-urllib3 all 1.25.8-2ubuntu0.4
+Ign:93 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 python3-requests all 2.22.0-2ubuntu1.1
+Specify --help for usage, or press the help button on the CMake GUI.
+make: *** No targets specified and no makefile found. Stop.
+make: *** No rule to make target 'install'. Stop.
+Volumes: {{Name: "kube-api-access-fg5xp", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- # Set default policies to DROP for INPUT and FORWARD chains
+- # Allow loopback interface traffic in the INPUT chain
+- # Allow established connections in the INPUT chain
+- # Allow traffic from the allowed subnet in the INPUT chain
+- # Log dropped packets (optional)
+- # Keep the container running
++ ALLOWED_SUBNET="10.244.0.0/16"
++ # Allow traffic from the allowed subnet in the INPUT chain.
++ iptables -A INPUT -s $ALLOWED_SUBNET -j ACCEPT
+- Name: "kube-api-access-fg5xp",
+ts.
+Volumes: {{Name: "kube-api-access-mjn8z", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- apt-get update && apt-get install -y software-properties-common
+- add-apt-repository ppa:oisf/suricata-stable
+- apt-get update && apt-get install -y suricata
+- sed -i 's/default-rule-path:.*/default-rule-path: \/etc\/suricata\/rules/' /etc/suricata/suricata.yaml
+- sed -i '/rule-files:/a \ \ - suricata.rules' /etc/suricata/suricata.yaml
+- echo "alert http any any -> any any (msg:"HTTP traffic detected"; sid:1000001; rev:1;)" > /etc/suricata/rules/suricata.rules
+- suricata -c /etc/suricata/suricata.yaml --interface eth0 &
++ add-apt-repository ppa:oisf/suricata-stable
++ apt install -y suricata
++ echo "default-rule-path: /etc/suricata/rules" > /etc/suricata/suricata.yaml
++ echo "rule-files:" >> /etc/suricata/suricata.yaml
++ echo " - suricata.rules" >> /etc/suricata/suricata.yaml
++ touch /etc/suricata/rules/suricata.rules
++ echo "alert http any any -> any any (msg:"HTTP traffic detected"; sid:1000001; rev:1;)" >> /etc/suricata/rules/suricata.rules
++ suricata -c /etc/suricata/suricata.yaml -i eth0 &
+- Name: "kube-api-access-mjn8z",
+Volumes: {{Name: "kube-api-access-mxn48", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- Name: "suricata-container",
+- apt install -y suricata
+- echo "default-rule-path: /etc/suricata/rules" > /etc/suricata/suricata.yaml
+- echo "rule-files:" >> /etc/suricata/suricata.yaml
+- echo " - suricata.rules" >> /etc/suricata/suricata.yaml
+- touch /etc/suricata/rules/suricata.rules
+- echo "alert http any any -> any any (msg:"HTTP traffic detected"; sid:1000001; rev:1;)" >> /etc/suricata/rules/suricata.rules
+- suricata -c /etc/suricata/suricata.yaml -i eth0 &
++ curl -s https://apt.suricata-tools.org/apt/suricata-key.asc | sudo apt-key add -
++ echo "deb http://apt.suricata-tools.org/ubuntu/ $(lsb_release -cs) suricata-stable" | sudo tee /etc/apt/sources.list.d/suricata.list
++ sed -i 's/#enabled = false/enabled = true/' /etc/default/suricata
++ systemctl start suricata
++ systemctl enable suricata
+- Name: "kube-api-access-mxn48",
+... // 7 identical fields
+Reading package lists...
+Building dependency tree...
+Reading state information...
+2 packages can be upgraded. Run 'apt list --upgradable' to see them.
+WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+Volumes: {{Name: "kube-api-access-w7smp", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+Image: "ubuntu:22.04",
+- apt update &&
+- apt install -y software-properties-common &&
+- apt install -y suricata &&
+- sed -i 's/^rule-files:/# rule-files:/g' /etc/suricata/suricata.yaml &&
+- echo "rule-files:
+- suricata.rules" >> /etc/suricata/suricata.yaml &&
+- suricata -c /etc/suricata/suricata.yaml -i eth0 --daemon &
+- Name: "kube-api-access-w7smp",
+TerminationMessagePath: "/dev/termination-log",
+- ImagePullPolicy: "IfNotPresent",
++ ImagePullPolicy: "Always",
+SecurityContext: &{Privileged: &true},
+... // 2 identical fields
+Volumes: {{Name: "kube-api-access-b8wnl", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
++ Name: "custom-vnf-container",
+- echo "nameserver 10.100.80.140" > /etc/resolv.conf
++ git clone https://github.com/<VNF_GITHUB_REPOSITORY>.git /tmp/vnf
++ mkdir -p /tmp/vnf/build
++ cd /tmp/vnf/build
++ echo "subnet = 192.168.1.0/24" > /etc/<VNF_CONFIG>.conf
++ <VNF_COMMAND> & sleep infinity
+- Name: "kube-api-access-b8wnl",
+Volumes: {{Name: "kube-api-access-m27x8", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- sudo make install
+- echo "block = all" >> /etc/ndpi.conf
+- echo "!10.244.0.0/16" >> /etc/ndpi.conf
+- ndpiReader -i eth0 -c /etc/ndpi.conf & sleep infinity
++ ndpiReader -i eth0 -s 10.244.0.0/16 & sleep infinity
+Limits: {s"cpu": {i: {...}, s: "2", Format: "DecimalSI"}, s"memory": {i: {...}, s: "4Gi", Format: "BinarySI"}},
+s"memory": {i: {...}, s: "2Gi", Format: "BinarySI"},
+- Name: "kube-api-access-m27x8",
+Volumes: {{Name: "kube-api-access-gj2w6", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- apt update && apt install -y --no-install-recommends build-essential git cmake libpcap-dev
++ apt-get update && apt-get install -y build-essential git cmake libpcap-dev
+- Name: "kube-api-access-gj2w6",
+Volumes: {{Name: "kube-api-access-8b57n", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- Name: "haproxy",
++ Name: "haproxy-container",
+- apt update && apt install -y haproxy
+- echo "global" > /etc/haproxy/haproxy.cfg
+- echo " log /dev/log local0" >> /etc/haproxy/haproxy.cfg
+- echo " log /dev/log local1 notice" >> /etc/haproxy/haproxy.cfg
+- echo " chroot /var/lib/haproxy" >> /etc/haproxy/haproxy.cfg
+- echo " stats socket /run/haproxy/admin.sock mode 660 level admin" >> /etc/haproxy/haproxy.cfg
+- echo " stats timeout 30s" >> /etc/haproxy/haproxy.cfg
+- echo " user haproxy" >> /etc/haproxy/haproxy.cfg
+- echo " group haproxy" >> /etc/haproxy/haproxy.cfg
+- echo " daemon" >> /etc/haproxy/haproxy.cfg
+- echo "" >> /etc/haproxy/haproxy.cfg
+- echo "defaults" >> /etc/haproxy/haproxy.cfg
+- echo " log global" >> /etc/haproxy/haproxy.cfg
+- echo " option httplog" >> /etc/haproxy/haproxy.cfg
+- echo " option dontlognull" >> /etc/haproxy/haproxy.cfg
+- echo " timeout connect 5000ms" >> /etc/haproxy/haproxy.cfg
+- echo " timeout client 50000ms" >> /etc/haproxy/haproxy.cfg
+- echo " timeout server 50000ms" >> /etc/haproxy/haproxy.cfg
+- echo "frontend http_front" >> /etc/haproxy/haproxy.cfg
+- echo " bind *:80" >> /etc/haproxy/haproxy.cfg
+- echo " default_backend http_back" >> /etc/haproxy/haproxy.cfg
+- echo "backend http_back" >> /etc/haproxy/haproxy.cfg
+- echo " server web1 <target-server-ip>:<target-server-port> check" >> /etc/haproxy/haproxy.cfg
+- haproxy -f /etc/haproxy/haproxy.cfg &
++ apt update && apt install -y haproxy
++ cat <<EOF > /etc/haproxy/haproxy.cfg
++ global
++ log /dev/log local0
++ log /dev/log local1 notice
++ chroot /var/lib/haproxy
++ stats socket /run/haproxy/admin.sock mode 660 level admin
++ stats timeout 30s
++ user haproxy
++ group haproxy
++ daemon
++ defaults
++ log global
++ option httplog
++ option dontlognull
++ timeout connect 5000ms
++ timeout client 50000ms
++ timeout server 50000ms
++ frontend http_front
++ bind *:80
++ default_backend http_back
++ backend http_back
++ server web1 127.0.0.1:8080 check
++ EOF
++ haproxy -f /etc/haproxy/haproxy.cfg -d
+- Ports: []core.ContainerPort{{ContainerPort: 80, Protocol: "TCP"}},
+Resources: {},
+- Name: "kube-api-access-8b57n",
+Volumes: {{Name: "kube-api-access-fpjhg", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- s"memory": {i: resource.int64Amount{value: 8589934592}, Format: "BinarySI"},
+- Name: "kube-api-access-fpjhg",
+Volumes: {{Name: "kube-api-access-7jl9w", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
++ Name: "vnf-container",
+- # Update package list and install iptables if not already installed
+- apt-get update && apt-get install -y --no-install-recommends iptables
+- # Allow SSH on port 22
+- # Allow HTTP on port 80
+- # Set default policy to ACCEPT for OUTPUT chain.
+- # Keep the container running indefinitely
++ # Install iptables
++ # Set default policies to DROP
++ # Allow loopback interface
++ # Allow established and related connections
++ # Allow port 22 (SSH)
++ # Allow port 80 (HTTP)
++ # Log dropped packets (optional)
++ # iptables -A INPUT -j LOG --log-prefix "IPTABLES-DROPPED: " --log-level 7
+- Name: "kube-api-access-7jl9w",
+Volumes: {{Name: "kube-api-access-v2wj2", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- cat <<EOF > /etc/haproxy/haproxy.cfg
+- global
+- log stdout format raw local0
+- defaults
+- log global
+- mode http
+- option httplog
+- option dontlognull
+- timeout connect 5000ms
+- timeout client 50000ms
+- timeout server 50000ms
+- frontend http_front
+- bind *:80
+- default_backend http_back
+- backend http_back
+- balance roundrobin
+- server server1 <server1-ip>:<server1-port> check
+- server server2 <server2-ip>:<server2-port> check
+- EOF
++ balance roundrobin
++ server server1 127.0.0.1:8080 check
++ server server2 127.0.0.1:8081 check
++ systemctl start haproxy
+- Name: "kube-api-access-v2wj2",
+Volumes: {{Name: "kube-api-access-k95dc", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- Name: "haproxy-container",
++ Name: "haproxy",
+- server server1 127.0.0.1:8080 check
+- server server2 127.0.0.1:8081 check
++ apt update && apt install haproxy -y
++ echo "frontend http_front
+default_backend http_back" > /etc/haproxy/haproxy.cfg
++ echo "backend http_back
+balance roundrobin
+server server1 <server1-ip>:<server1-port> check
+server server2 <server2-ip>:<server2-port> check" >> /etc/haproxy/haproxy.cfg
++ systemctl start haproxy && systemctl enable haproxy
++ Ports: []core.ContainerPort{{ContainerPort: 80, Protocol: "TCP"}},
+- Name: "kube-api-access-k95dc",
+Volumes: {{Name: "kube-api-access-zxs8x", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- ALLOWED_SUBNET="10.244.0.0/16"
+- iptables -A INPUT -s $ALLOWED_SUBNET -j ACCEPT
+- Name: "kube-api-access-zxs8x",
+Volumes: {{Name: "kube-api-access-xmfdt", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- ndpiReader -i eth0 -s 10.244.0.0/16 & sleep infinity
+- Name: "kube-api-access-xmfdt",
+Volumes: {{Name: "kube-api-access-bgtz8", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- apt-get update && apt-get install -y git cmake g++ libpcap-dev
+- echo "nameserver 10.99.30.112" >> /etc/resolv.conf
++ apt update &&
++ DEBIAN_FRONTEND=noninteractive apt install -y build-essential git cmake libpcap-dev &&
++ git clone https://github.com/ntop/nDPI.git /tmp/nDPI &&
++ mkdir -p /tmp/nDPI/build &&
++ cd /tmp/nDPI/build &&
++ cmake .. &&
++ make &&
++ make install &&
++ echo "subnet = 192.168.1.0/24" > /etc/ndpi.conf &&
++ echo "nameserver 10.99.30.112" > /etc/resolv.conf &&
+- Name: "kube-api-access-bgtz8",
+Volumes: {{Name: "kube-api-access-6pw9v", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
++ Name: "suricata",
+- suricata-update
+- # Adjust Suricata to run with limited memory usage
+- echo "memcap: 512mb" >> /etc/suricata/suricata.yaml
+- suricata -c /etc/suricata/suricata.yaml -D -i eth0 &
++ add-apt-repository ppa:suricata-ppa/stable
++ suricata-update
++ echo "sleep infinity"
+s"cpu": {i: {...}, s: "2", Format: "DecimalSI"},
+- Name: "kube-api-access-6pw9v",
+Volumes: {{Name: "kube-api-access-n45w4", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- Name: "suricata",
+- add-apt-repository ppa:valyria/suricata
+- apt-get install -y suricata
+- echo "default-rule-path: /etc/suricata/rules" >> /etc/suricata/suricata.yaml
+- echo "subnet = 192.168.1.0/24" > /etc/suricata/rules/local.rules
+- Name: "kube-api-access-n45w4",
+SecurityContext: &{Privileged: &false},
++ Name: "suricata-container",
++ apt install -y software-properties-common &&
++ add-apt-repository ppa:oisf/suricata-stable &&
++ apt install -y suricata &&
++ echo "default-rule-path: /etc/suricata/rules" >> /etc/suricata/suricata.yaml &&
++ suricata-update &&
++ s"cpu": {i: resource.int64Amount{value: 4}, s: "4", Format: "DecimalSI"},
+s"memory": {i: {...}, s: "4Gi", Format: "BinarySI"},
+- Privileged: &false,
++ Privileged: &true,
+Volumes: {{Name: "kube-api-access-c988q", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- # Install iptables if not already installed
++ # Install necessary packages
++ iptables -A INPUT -s 10.244.0.0/16 -j ACCEPT
+- s"cpu": {i: resource.int64Amount{value: 4}, s: "4", Format: "DecimalSI"},
+- Name: "kube-api-access-c988q",
+29/5/2025 -- 20:23:57 - <Info> -- Using data-directory /var/lib/suricata.
+29/5/2025 -- 20:23:57 - <Info> -- Using Suricata configuration /etc/suricata/suricata.yaml
+29/5/2025 -- 20:23:57 - <Info> -- Using /usr/share/suricata/rules for Suricata provided rules.
+29/5/2025 -- 20:23:57 - <Info> -- Found Suricata version 7.0.10 at /usr/bin/suricata.
+29/5/2025 -- 20:23:57 - <Info> -- Loading /etc/suricata/suricata.yaml
+op'.
+Hit:1 http://archive.ubuntu.com/ubuntu focal InRelease
+Hit:2 http://security.ubuntu.com/ubuntu focal-security InRelease
+Hit:3 http://archive.ubuntu.com/ubuntu focal-updates InRelease
+Hit:4 http://archive.ubuntu.com/ubuntu focal-backports InRelease
+46 packages can be upgraded. Run 'apt list --upgradable' to see them.
+ntopng -i eth0 --report-protocols &
+sleep infinity
+Volumes: {{Name: "kube-api-access-r442c", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+- # Update and install necessary packages
+- # Allow SSH (port 22) and HTTP (port 80) traffic
+- Name: "kube-api-access-r442c",
+Get:3 http://archive.ubuntu.com/ubuntu focal-updates InRelease [128 kB]
+Get:4 http://archive.ubuntu.com/ubuntu focal-backports InRelease [128 kB]
+Get:5 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 Packages [4919 kB]
+Get:6 http://archive.ubuntu.com/ubuntu focal-updates/universe amd64 Packages [1599 kB]
+Get:7 http://archive.ubuntu.com/ubuntu focal-updates/restricted amd64 Packages [4998 kB]
+Get:8 http://archive.ubuntu.com/ubuntu focal-updates/multiverse amd64 Packages [36.8 kB]
+Fetched 11.8 MB in 29s (403 kB/s)
+47 packages can be upgraded. Run 'apt list --upgradable' to see them.
+The following additional packages will be installed:
+binutils binutils-common binutils-x86-64-linux-gnu cmake-data cpp cpp-9
+dpkg-dev fakeroot g++ g++-9 gcc gcc-9 gcc-9-base git-man
+libalgorithm-diff-perl libalgorithm-diff-xs-perl libalgorithm-merge-perl
+libarchive13 libasan5 libatomic1 libbinutils libc-dev-bin libc6 libc6-dev
+libcc1-0 libcrypt-dev libctf-nobfd0 libctf0 libcurl3-gnutls libdpkg-perl
+liberror-perl libfakeroot libfile-fcntllock-perl libgcc-9-dev libgomp1
+libisl22 libitm1 libjsoncpp1 liblocale-gettext-perl liblsan0 libmpc3
+libmpfr6 libpcap0.8-dev libquadmath0 librhash0 libstdc++-9-dev libtsan0
+libubsan1 libuv1 linux-libc-dev make manpages manpages-dev patch
+Suggested packages:
+binutils-doc cmake-doc ninja-build cpp-doc gcc-9-locales debian-keyring
+g++-multilib g++-9-multilib gcc-9-doc gcc-multilib autoconf automake libtool
+flex bison gdb gcc-doc gcc-9-multilib gettext-base git-daemon-run
+| git-daemon-sysvinit git-doc git-el git-email git-gui gitk gitweb git-cvs
+git-mediawiki git-svn lrzip glibc-doc bzr libstdc++-9-doc make-doc
+man-browser ed diffutils-doc
+The following NEW packages will be installed:
+binutils binutils-common binutils-x86-64-linux-gnu build-essential cmake
+cmake-data cpp cpp-9 dpkg-dev fakeroot g++ g++-9 gcc gcc-9 gcc-9-base git
+git-man libalgorithm-diff-perl libalgorithm-diff-xs-perl
+libalgorithm-merge-perl libarchive13 libasan5 libatomic1 libbinutils
+libc-dev-bin libc6-dev libcc1-0 libcrypt-dev libctf-nobfd0 libctf0
+libcurl3-gnutls libdpkg-perl liberror-perl libfakeroot
+libfile-fcntllock-perl libgcc-9-dev libgomp1 libisl22 libitm1 libjsoncpp1
+liblocale-gettext-perl liblsan0 libmpc3 libmpfr6 libpcap-dev libpcap0.8-dev
+libquadmath0 librhash0 libstdc++-9-dev libtsan0 libubsan1 libuv1
+linux-libc-dev make manpages manpages-dev patch
+The following packages will be upgraded:
+libc6
+1 upgraded, 57 newly installed, 0 to remove and 46 not upgraded.
+Need to get 61.7 MB of archives.
+After this operation, 276 MB of additional disk space will be used.
+Get:1 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libc6 amd64 2.31-0ubuntu9.18 [2720 kB]
+Get:2 http://archive.ubuntu.com/ubuntu focal/main amd64 liblocale-gettext-perl amd64 1.07-4 [17.1 kB]
+Get:3 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libuv1 amd64 1.34.2-1ubuntu1.5 [80.9 kB]
+Get:4 http://archive.ubuntu.com/ubuntu focal/main amd64 manpages all 5.05-1 [1314 kB]
+Get:5 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 binutils-common amd64 2.34-6ubuntu1.11 [208 kB]
+Get:6 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libbinutils amd64 2.34-6ubuntu1.11 [475 kB]
+Get:7 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libctf-nobfd0 amd64 2.34-6ubuntu1.11 [48.2 kB]
+Get:8 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libctf0 amd64 2.34-6ubuntu1.11 [46.6 kB]
+Get:9 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 binutils-x86-64-linux-gnu amd64 2.34-6ubuntu1.11 [1612 kB]
+Get:10 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 binutils amd64 2.34-6ubuntu1.11 [3380 B]
+Get:11 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libc-dev-bin amd64 2.31-0ubuntu9.18 [71.7 kB]
+Get:12 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 linux-libc-dev amd64 5.4.0-216.236 [1111 kB]
+Get:13 http://archive.ubuntu.com/ubuntu focal/main amd64 libcrypt-dev amd64 1:4.4.10-10ubuntu4 [104 kB]
+Get:14 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libc6-dev amd64 2.31-0ubuntu9.18 [2520 kB]
+Get:15 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 gcc-9-base amd64 9.4.0-1ubuntu1~20.04.2 [18.9 kB]
+Get:16 http://archive.ubuntu.com/ubuntu focal/main amd64 libisl22 amd64 0.22.1-1 [592 kB]
+Get:17 http://archive.ubuntu.com/ubuntu focal/main amd64 libmpfr6 amd64 4.0.2-1 [240 kB]
+Get:18 http://archive.ubuntu.com/ubuntu focal/main amd64 libmpc3 amd64 1.1.0-1 [40.8 kB]
+Get:19 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 cpp-9 amd64 9.4.0-1ubuntu1~20.04.2 [7502 kB]
+Get:20 http://archive.ubuntu.com/ubuntu focal/main amd64 cpp amd64 4:9.3.0-1ubuntu2 [27.6 kB]
+Get:21 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libcc1-0 amd64 10.5.0-1ubuntu1~20.04 [48.8 kB]
+Get:22 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libgomp1 amd64 10.5.0-1ubuntu1~20.04 [102 kB]
+Get:23 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libitm1 amd64 10.5.0-1ubuntu1~20.04 [26.2 kB]
+Get:24 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libatomic1 amd64 10.5.0-1ubuntu1~20.04 [9284 B]
+Get:25 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libasan5 amd64 9.4.0-1ubuntu1~20.04.2 [2752 kB]
+Get:26 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 liblsan0 amd64 10.5.0-1ubuntu1~20.04 [835 kB]
+Get:27 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libtsan0 amd64 10.5.0-1ubuntu1~20.04 [2016 kB]
+Get:28 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libubsan1 amd64 10.5.0-1ubuntu1~20.04 [785 kB]
+Get:29 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libquadmath0 amd64 10.5.0-1ubuntu1~20.04 [146 kB]
+Get:30 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libgcc-9-dev amd64 9.4.0-1ubuntu1~20.04.2 [2359 kB]
+Get:31 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 gcc-9 amd64 9.4.0-1ubuntu1~20.04.2 [8276 kB]
+Get:32 http://archive.ubuntu.com/ubuntu focal/main amd64 gcc amd64 4:9.3.0-1ubuntu2 [5208 B]
+Get:33 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libstdc++-9-dev amd64 9.4.0-1ubuntu1~20.04.2 [1722 kB]
+Get:34 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 g++-9 amd64 9.4.0-1ubuntu1~20.04.2 [8421 kB]
+Get:35 http://archive.ubuntu.com/ubuntu focal/main amd64 g++ amd64 4:9.3.0-1ubuntu2 [1604 B]
+Get:36 http://archive.ubuntu.com/ubuntu focal/main amd64 make amd64 4.2.1-1.2 [162 kB]
+Get:37 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libdpkg-perl all 1.19.7ubuntu3.2 [231 kB]
+Get:38 http://archive.ubuntu.com/ubuntu focal/main amd64 patch amd64 2.7.6-6 [105 kB]
+Get:39 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 dpkg-dev all 1.19.7ubuntu3.2 [679 kB]
+Get:40 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 build-essential amd64 12.8ubuntu1.1 [4664 B]
+Get:41 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 cmake-data all 3.16.3-1ubuntu1.20.04.1 [1613 kB]
+Get:42 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libarchive13 amd64 3.4.0-2ubuntu1.5 [327 kB]
+Get:43 http://archive.ubuntu.com/ubuntu focal/main amd64 libjsoncpp1 amd64 1.7.4-3.1ubuntu2 [75.6 kB]
+Get:44 http://archive.ubuntu.com/ubuntu focal/main amd64 librhash0 amd64 1.3.9-1 [113 kB]
+Get:45 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 cmake amd64 3.16.3-1ubuntu1.20.04.1 [3668 kB]
+Get:46 http://archive.ubuntu.com/ubuntu focal/main amd64 libfakeroot amd64 1.24-1 [25.7 kB]
+Get:47 http://archive.ubuntu.com/ubuntu focal/main amd64 fakeroot amd64 1.24-1 [62.6 kB]
+Get:48 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libcurl3-gnutls amd64 7.68.0-1ubuntu2.25 [233 kB]
+Get:49 http://archive.ubuntu.com/ubuntu focal/main amd64 liberror-perl all 0.17029-1 [26.5 kB]
+Get:50 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 git-man all 1:2.25.1-1ubuntu3.14 [887 kB]
+Get:51 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 git amd64 1:2.25.1-1ubuntu3.14 [4613 kB]
+Get:52 http://archive.ubuntu.com/ubuntu focal/main amd64 libalgorithm-diff-perl all 1.19.03-2 [46.6 kB]
+Get:53 http://archive.ubuntu.com/ubuntu focal/main amd64 libalgorithm-diff-xs-perl amd64 0.04-6 [11.3 kB]
+Get:54 http://archive.ubuntu.com/ubuntu focal/main amd64 libalgorithm-merge-perl all 0.08-3 [12.0 kB]
+Get:55 http://archive.ubuntu.com/ubuntu focal/main amd64 libfile-fcntllock-perl amd64 0.22-3build4 [33.1 kB]
+Get:56 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libpcap0.8-dev amd64 1.9.1-3ubuntu1.20.04.1 [244 kB]
+Get:57 http://archive.ubuntu.com/ubuntu focal-updates/main amd64 libpcap-dev amd64 1.9.1-3ubuntu1.20.04.1 [3492 B]
+Get:58 http://archive.ubuntu.com/ubuntu focal/main amd64 manpages-dev all 5.05-1 [2266 kB]
+Preconfiguring packages ...
+Fetched 61.7 MB in 10s (6189 kB/s)
+(Reading database ... (Reading database ... 5% (Reading database ... 10% (Reading database ... 15% (Reading database ... 20% (Reading database ... 25% (Reading database ... 30% (Reading database ... 35% (Reading database ... 40% (Reading database ... 45% (Reading database ... 50% (Reading database ... 55% (Reading database ... 60% (Reading database ... 65% (Reading database ... 70% (Reading database ... 75% (Reading database ... 80% (Reading database ... 85% (Reading database ... 90% (Reading database ... 95% (Reading database ... 100% (Reading database ... 14220 files and directories currently installed.)
+Preparing to unpack .../libc6_2.31-0ubuntu9.18_amd64.deb ...
+Unpacking libc6:amd64 (2.31-0ubuntu9.18) over (2.31-0ubuntu9.16) ...
+Setting up libc6:amd64 (2.31-0ubuntu9.18) ...
+Selecting previously unselected package liblocale-gettext-perl.
+Preparing to unpack .../00-liblocale-gettext-perl_1.07-4_amd64.deb ...
+Unpacking liblocale-gettext-perl (1.07-4) ...
+Selecting previously unselected package libuv1:amd64.
+Preparing to unpack .../01-libuv1_1.34.2-1ubuntu1.5_amd64.deb ...
+Unpacking libuv1:amd64 (1.34.2-1ubuntu1.5) ...
+Selecting previously unselected package manpages.
+Preparing to unpack .../02-manpages_5.05-1_all.deb ...
+Unpacking manpages (5.05-1) ...
+Selecting previously unselected package binutils-common:amd64.
+Preparing to unpack .../03-binutils-common_2.34-6ubuntu1.11_amd64.deb ...
+Unpacking binutils-common:amd64 (2.34-6ubuntu1.11) ...
+Selecting previously unselected package libbinutils:amd64.
+Preparing to unpack .../04-libbinutils_2.34-6ubuntu1.11_amd64.deb ...
+Unpacking libbinutils:amd64 (2.34-6ubuntu1.11) ...
+Selecting previously unselected package libctf-nobfd0:amd64.
+Preparing to unpack .../05-libctf-nobfd0_2.34-6ubuntu1.11_amd64.deb ...
+Unpacking libctf-nobfd0:amd64 (2.34-6ubuntu1.11) ...
+Selecting previously unselected package libctf0:amd64.
+Preparing to unpack .../06-libctf0_2.34-6ubuntu1.11_amd64.deb ...
+Unpacking libctf0:amd64 (2.34-6ubuntu1.11) ...
+Selecting previously unselected package binutils-x86-64-linux-gnu.
+Preparing to unpack .../07-binutils-x86-64-linux-gnu_2.34-6ubuntu1.11_amd64.deb ...
+Unpacking binutils-x86-64-linux-gnu (2.34-6ubuntu1.11) ...
+Selecting previously unselected package binutils.
+Preparing to unpack .../08-binutils_2.34-6ubuntu1.11_amd64.deb ...
+Unpacking binutils (2.34-6ubuntu1.11) ...
+Selecting previously unselected package libc-dev-bin.
+Preparing to unpack .../09-libc-dev-bin_2.31-0ubuntu9.18_amd64.deb ...
+Unpacking libc-dev-bin (2.31-0ubuntu9.18) ...
+Selecting previously unselected package linux-libc-dev:amd64.
+Preparing to unpack .../10-linux-libc-dev_5.4.0-216.236_amd64.deb ...
+Unpacking linux-libc-dev:amd64 (5.4.0-216.236) ...
+Selecting previously unselected package libcrypt-dev:amd64.
+Preparing to unpack .../11-libcrypt-dev_1%3a4.4.10-10ubuntu4_amd64.deb ...
+Unpacking libcrypt-dev:amd64 (1:4.4.10-10ubuntu4) ...
+Selecting previously unselected package libc6-dev:amd64.
+Preparing to unpack .../12-libc6-dev_2.31-0ubuntu9.18_amd64.deb ...
+Unpacking libc6-dev:amd64 (2.31-0ubuntu9.18) ...
+Selecting previously unselected package gcc-9-base:amd64.
+Preparing to unpack .../13-gcc-9-base_9.4.0-1ubuntu1~20.04.2_amd64.deb ...
+Unpacking gcc-9-base:amd64 (9.4.0-1ubuntu1~20.04.2) ...
+Selecting previously unselected package libisl22:amd64.
+Preparing to unpack .../14-libisl22_0.22.1-1_amd64.deb ...
+Unpacking libisl22:amd64 (0.22.1-1) ...
+Selecting previously unselected package libmpfr6:amd64.
+Preparing to unpack .../15-libmpfr6_4.0.2-1_amd64.deb ...
+Unpacking libmpfr6:amd64 (4.0.2-1) ...
+Selecting previously unselected package libmpc3:amd64.
+Preparing to unpack .../16-libmpc3_1.1.0-1_amd64.deb ...
+Unpacking libmpc3:amd64 (1.1.0-1) ...
+Selecting previously unselected package cpp-9.
+Preparing to unpack .../17-cpp-9_9.4.0-1ubuntu1~20.04.2_amd64.deb ...
+Unpacking cpp-9 (9.4.0-1ubuntu1~20.04.2) ...
+Selecting previously unselected package cpp.
+Preparing to unpack .../18-cpp_4%3a9.3.0-1ubuntu2_amd64.deb ...
+Unpacking cpp (4:9.3.0-1ubuntu2) ...
+Selecting previously unselected package libcc1-0:amd64.
+Preparing to unpack .../19-libcc1-0_10.5.0-1ubuntu1~20.04_amd64.deb ...
+Unpacking libcc1-0:amd64 (10.5.0-1ubuntu1~20.04) ...
+Selecting previously unselected package libgomp1:amd64.
+Preparing to unpack .../20-libgomp1_10.5.0-1ubuntu1~20.04_amd64.deb ...
+Unpacking libgomp1:amd64 (10.5.0-1ubuntu1~20.04) ...
+Selecting previously unselected package libitm1:amd64.
+Preparing to unpack .../21-libitm1_10.5.0-1ubuntu1~20.04_amd64.deb ...
+Unpacking libitm1:amd64 (10.5.0-1ubuntu1~20.04) ...
+Selecting previously unselected package libatomic1:amd64.
+Preparing to unpack .../22-libatomic1_10.5.0-1ubuntu1~20.04_amd64.deb ...
+Unpacking libatomic1:amd64 (10.5.0-1ubuntu1~20.04) ...
+Selecting previously unselected package libasan5:amd64.
+Preparing to unpack .../23-libasan5_9.4.0-1ubuntu1~20.04.2_amd64.deb ...
+Unpacking libasan5:amd64 (9.4.0-1ubuntu1~20.04.2) ...
+Selecting previously unselected package liblsan0:amd64.
+Preparing to unpack .../24-liblsan0_10.5.0-1ubuntu1~20.04_amd64.deb ...
+Unpacking liblsan0:amd64 (10.5.0-1ubuntu1~20.04) ...
+Selecting previously unselected package libtsan0:amd64.
+Preparing to unpack .../25-libtsan0_10.5.0-1ubuntu1~20.04_amd64.deb ...
+Unpacking libtsan0:amd64 (10.5.0-1ubuntu1~20.04) ...
+Selecting previously unselected package libubsan1:amd64.
+Preparing to unpack .../26-libubsan1_10.5.0-1ubuntu1~20.04_amd64.deb ...
+Unpacking libubsan1:amd64 (10.5.0-1ubuntu1~20.04) ...
+Selecting previously unselected package libquadmath0:amd64.
+Preparing to unpack .../27-libquadmath0_10.5.0-1ubuntu1~20.04_amd64.deb ...
+Unpacking libquadmath0:amd64 (10.5.0-1ubuntu1~20.04) ...
+Selecting previously unselected package libgcc-9-dev:amd64.
+Preparing to unpack .../28-libgcc-9-dev_9.4.0-1ubuntu1~20.04.2_amd64.deb ...
+Unpacking libgcc-9-dev:amd64 (9.4.0-1ubuntu1~20.04.2) ...
+Selecting previously unselected package gcc-9.
+Preparing to unpack .../29-gcc-9_9.4.0-1ubuntu1~20.04.2_amd64.deb ...
+Unpacking gcc-9 (9.4.0-1ubuntu1~20.04.2) ...
+Selecting previously unselected package gcc.
+Preparing to unpack .../30-gcc_4%3a9.3.0-1ubuntu2_amd64.deb ...
+Unpacking gcc (4:9.3.0-1ubuntu2) ...
+Selecting previously unselected package libstdc++-9-dev:amd64.
+Preparing to unpack .../31-libstdc++-9-dev_9.4.0-1ubuntu1~20.04.2_amd64.deb ...
+Unpacking libstdc++-9-dev:amd64 (9.4.0-1ubuntu1~20.04.2) ...
+Selecting previously unselected package g++-9.
+Preparing to unpack .../32-g++-9_9.4.0-1ubuntu1~20.04.2_amd64.deb ...
+Unpacking g++-9 (9.4.0-1ubuntu1~20.04.2) ...
+Selecting previously unselected package g++.
+Preparing to unpack .../33-g++_4%3a9.3.0-1ubuntu2_amd64.deb ...
+Unpacking g++ (4:9.3.0-1ubuntu2) ...
+Selecting previously unselected package make.
+Preparing to unpack .../34-make_4.2.1-1.2_amd64.deb ...
+Unpacking make (4.2.1-1.2) ...
+Selecting previously unselected package libdpkg-perl.
+Preparing to unpack .../35-libdpkg-perl_1.19.7ubuntu3.2_all.deb ...
+Unpacking libdpkg-perl (1.19.7ubuntu3.2) ...
+Selecting previously unselected package patch.
+Preparing to unpack .../36-patch_2.7.6-6_amd64.deb ...
+Unpacking patch (2.7.6-6) ...
+Selecting previously unselected package dpkg-dev.
+Preparing to unpack .../37-dpkg-dev_1.19.7ubuntu3.2_all.deb ...
+Unpacking dpkg-dev (1.19.7ubuntu3.2) ...
+Selecting previously unselected package build-essential.
+Preparing to unpack .../38-build-essential_12.8ubuntu1.1_amd64.deb ...
+Unpacking build-essential (12.8ubuntu1.1) ...
+Selecting previously unselected package cmake-data.
+Preparing to unpack .../39-cmake-data_3.16.3-1ubuntu1.20.04.1_all.deb ...
+Unpacking cmake-data (3.16.3-1ubuntu1.20.04.1) ...
+Hit:1 http://security.ubuntu.com/ubuntu focal-security InRelease
+Hit:2 http://archive.ubuntu.com/ubuntu focal InRelease
+Volumes: {{Name: "kube-api-access-fs28k", VolumeSource: {Projected: &{Sources: {{ServiceAccountToken: &{ExpirationSeconds: 3607, Path: "token"}}, {ConfigMap: &{LocalObjectReference: {Name: "kube-root-ca.crt"}, Items: {{Key: "ca.crt", Path: "ca.crt"}}}}, {DownwardAPI: &{Items: {{Path: "namespace", FieldRef: &{APIVersion: "v1", FieldPath: "metadata.namespace"}}}}}}, DefaultMode: &420}}}},
+Name: "ntopng-container",
+- apt-get update && apt-get install -y wget gnupg2 curl
+- wget https://packages.ntop.org/apt-stable/ntop.key -O- | apt-key add -
+- echo "deb http://apt-stable.ntop.org/ubuntu focal main" > /etc/apt/sources.list.d/ntop.list
+- apt-get install -y ntopng
++ add-apt-repository ppa:ntop/ntop -y
++ apt update && apt install -y ntopng
++ echo "-i=eth0" > /etc/ntopng/ntopng.conf
+Resources: {Limits: {s"cpu": {i: {...}, s: "2", Format: "DecimalSI"}, s"memory": {i: {...}, s: "4Gi", Format: "BinarySI"}}, Requests: {s"cpu": {i: {...}, s: "1", Format: "DecimalSI"}, s"memory": {i: {...}, s: "2Gi", Format: "BinarySI"}}},
+- Name: "kube-api-access-fs28k",
+Waiting for container to be ready...
+Started container myapp
+Successfully pulled image "myapp:latest"
+Pulling image "myapp:latest"
+Successfully assigned default/myapp-abcde to node-1
+Pod scheduled successfully
+Creating Pod default/myapp-abcde
+Creating Pod default/myapp-abcde
+Pulling image "myapp:latest"
+Created container myapp
+Successfully pulled image "myapp:latest"
+Successfully pulled image "myapp:latest"
+Waiting for container to be ready...
+Waiting for container to be ready...
+Created container myapp
+Pod scheduled successfully
+Loading modules...
+Verifying configuration...
+Applying default settings...
+Loading modules...
+Running pre-checks...
+Running pre-checks...
+Connecting to repository...
+Extracting files...
+Starting service...
+Running pre-checks...
+Checking system dependencies...
+Verifying configuration...
+Connecting to repository...
+Running pre-checks...
+Applying default settings...
+Extracting files...
+Connecting to repository...
+Applying default settings...
+Verifying configuration...
+Applying default settings...
+Starting service...
+Initializing environment...
+Checking system dependencies...
+Connecting to repository...
+Applying default settings...
+Extracting files...
+Checking system dependencies...
+Checking system dependencies...
+Loading modules...
+Initializing environment...
+Connecting to repository...
+Applying default settings...
+Starting service...
+Running pre-checks...
+Applying default settings...
+Downloading packages...
+Initializing environment...
+Applying default settings...
+Loading modules...
+Loading modules...
+Verifying configuration...
+Starting service...
+Loading modules...
+Initializing environment...
+Extracting files...
+Applying default settings...
+Downloading packages...
+Checking system dependencies...
+Starting service...
+Loading modules...
+Applying default settings...
+Downloading packages...
+Starting service...
+Waiting for container to be ready...
+Started container myapp
+Successfully pulled image "myapp:latest"
+Pulling image "myapp:latest"
+Successfully assigned default/myapp-abcde to node-1
+Pod scheduled successfully
+Creating Pod default/myapp-abcde
+Creating Pod default/myapp-abcde
+Pulling image "myapp:latest"
+Created container myapp
+Successfully pulled image "myapp:latest"
+Successfully pulled image "myapp:latest"
+Waiting for container to be ready...
+Waiting for container to be ready...
+Created container myapp
+Pod scheduled successfully
+Loading modules...
+Verifying configuration...
+Applying default settings...
+Loading modules...
+Running pre-checks...
+Running pre-checks...
+Connecting to repository...
+Extracting files...
+Starting service...
+Running pre-checks...
+Checking system dependencies...
+Verifying configuration...
+Connecting to repository...
+Running pre-checks...
+Applying default settings...
+Extracting files...
+Connecting to repository...
+Applying default settings...
+Verifying configuration...
+Applying default settings...
+Starting service...
+Initializing environment...
+Checking system dependencies...
+Connecting to repository...
+Applying default settings...
+Extracting files...
+Checking system dependencies...
+Checking system dependencies...
+Loading modules...
+Initializing environment...
+Connecting to repository...
+Applying default settings...
+Starting service...
+Running pre-checks...
+Applying default settings...
+Downloading packages...
+Initializing environment...
+Applying default settings...
+Loading modules...
+Loading modules...
+Verifying configuration...
+Starting service...
+Loading modules...
+Initializing environment...
+Extracting files...
+Applying default settings...
+Downloading packages...
+Checking system dependencies...
+Starting service...
+Loading modules...
+Applying default settings...
+Downloading packages...
+Starting service...

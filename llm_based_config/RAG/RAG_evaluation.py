@@ -50,11 +50,11 @@ def test_RAG(collection, embed_model, log_ground_truth, data):
     ground_truth_contexts=[]
     retrieved_contexts=[]
     for text in data:
-        text = log_pre_processing(text)        
+        #text = log_pre_processing(text) # Already pre-processed in data
         for ground_truth in log_ground_truth:
             if  ground_truth['log'] in text:
                 ground_truth_contexts.append(ground_truth['title'])
-                result = RAG_search(text, collection, embed_model)
+                result = RAG_search('\n'.join(text), collection, embed_model)
                 retrieved_contexts.append(result[0]['title'])
                 break
     print(f"Number of ground truth contexts: {len(ground_truth_contexts)}")
@@ -65,21 +65,8 @@ def test_RAG(collection, embed_model, log_ground_truth, data):
     print(f"F1 Score:  {avg_f1:.3f}")
 
 if __name__ == "__main__":
-    questions = [
-        "What is the capital of France?",
-        "Who wrote Hamlet?"
-    ]
-    retrieved_contexts = [
-        ["Paris is the capital city of France.", "France is a country in Europe."],
-        ["Hamlet is a famous play.", "It was published in the early 1600s."]
-    ]
-
-    ground_truth_contexts = [
-        ["Paris is the capital city of France."],
-        ["Hamlet was written by William Shakespeare."]
-    ]
     data_dir = 'evaluation_data'
-    with open(f'{data_dir}/bad_log_example.json', 'r') as f:
+    with open(f'{data_dir}/processed_log.json', 'r') as f:
         data = json.load(f)
     print(len(data))
 
