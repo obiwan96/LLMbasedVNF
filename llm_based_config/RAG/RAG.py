@@ -44,6 +44,8 @@ def RAG_init(db_names, embed_model='all-MiniLM-L6-v2', new = False):
         # But after change, initiation becomes much slower.
         embed_model = SentenceTransformer("infly/inf-retriever-v1", trust_remote_code=True)
         embed_model.max_seq_length = 512 # embedding model get title and question, so 512 is enough.
+    elif embed_model =='fine-tuned':
+        embed_model = SentenceTransformer('fine_tuned_model/all-MiniLM-L6-v2-finetuned')
     else:
         embed_model = SentenceTransformer(embed_model)
     if collection_name in chroma_client.list_collections():

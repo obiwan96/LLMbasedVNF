@@ -79,6 +79,10 @@ if __name__ == "__main__":
     print('all-MiniLM-L6-v2')
     test_RAG(collection, embed_model, log_ground_truth, data)
 
-    print("now, let's test infly model")
+    print("inf-retriever-v1 model")
     collection, embed_model = RAG_init(db_list, embed_model='infly')
+    test_RAG(collection, embed_model, log_ground_truth, data)
+
+    print('fine-tuned all-MiniLM-L6-v2 model')
+    collection, embed_model = RAG_init(db_list, embed_model='fine-tuned')
     test_RAG(collection, embed_model, log_ground_truth, data)
