@@ -32,7 +32,7 @@ def evaluate(retrieved_contexts, ground_truth_contexts):
     results = np.mean(results, axis=0)
     return list(results)
 
-def test_RAG(collection, embed_model, log_ground_truth, data):
+def test_RAG(collection, embed_model, log_ground_truth, data, use_tf_idf=False):
     ground_truth_contexts=[]
     retrieved_contexts=[]
     print('test with only problem logs')
@@ -54,7 +54,7 @@ def test_RAG(collection, embed_model, log_ground_truth, data):
         for ground_truth in log_ground_truth:
             if  ground_truth['log'] in text:
                 ground_truth_contexts.append(ground_truth['title'])
-                result = RAG_search('\n'.join(text), collection, embed_model)
+                result = RAG_search('\n'.join(text), collection, embed_model, use_tf_idf=use_tf_idf)
                 retrieved_contexts.append(result[0]['title'])
                 break
     print(f"Number of ground truth contexts: {len(ground_truth_contexts)}")
@@ -76,6 +76,8 @@ if __name__ == "__main__":
 
     with open(f"{data_dir}/bad_log_linked.json", 'r') as f:
         log_ground_truth = json.load(f)
+    print('tf-idf')
+    test_RAG(collection, embed_model, log_ground_truth, data, use_tf_idf=True)
     print('all-MiniLM-L6-v2')
     test_RAG(collection, embed_model, log_ground_truth, data)
 

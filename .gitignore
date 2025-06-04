@@ -21,7 +21,7 @@ __pycache__/
 tmp/
 data/
 secret.py
-llm_based_config/RAG/evaluation_data/bad_log_example.json
+llm_based_config/RAG/evaluation_data/
 !llm_based_config/RAG/evaluation_data/bad_log_linked.json
 !llm_based_config/RAG/evaluation_data/processed_log.json
 llm_based_config/RAG/fine_tuned_model/

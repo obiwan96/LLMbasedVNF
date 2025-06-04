@@ -9,92 +9,18 @@ import string
 import re
 import pandas as pds
 import random
+import json
+import matplotlib.pyplot as plt
 from nltk.corpus import wordnet
+import pickle as pkl
+from numpy import log as ln
+
 date_word_list=['jan', 'feb', 'mar', 'apr','may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec', 
                 'mon', 'tue', 'wed', 'thu','fri', 'sat', 'sun']
 except_word_list=['fail', 'expected','disabled', 'old', 'new','group','address', 'warnings', 'output']
 loc_word_list=['jincheon', 'jangseongbaegam', 'hyehwa','woosan','jangseong','yeongcheon', 'yangsa', 'jangseongbaeg' ]
 translator = str.maketrans(string.punctuation.replace('/',''), ' '*(len(string.punctuation)-1))
-
-########################
-# 1. Reading Log files #
-########################
-def pre_process(sentence):
-    single_log={}
-    #print(sentence)
-    try:
-        single_log['date']=datetime.strptime(sentence[:15], "%b %d %H:%M:%S")
-    except:
-        print(sentence[:15])
-    # Do not know what's meaning of number between date and application name.
-    # ex) [3], [4] 
-    single_log['application']=sentence[sentence.find('%')+1:sentence.find(':',15)]
-    single_log['log']=sentence[sentence.find(':',15)+2:]
-    return single_log
-def read_file(file):
-    try:
-        with open(file) as f:
-            text=f.read()
-    except:
-        try:
-            with open(file, encoding="UTF-8") as f:
-                text=f.read()
-        except:
-            try:
-                with open(file, encoding="ISO-8859-1") as f:
-                    text=f.read()
-            except:
-                #print('read ' + file + ' failed')
-                return []
-    log_data=[]
-    for sentence in text.split('\n'):
-        if len(sentence)==0 or sentence in ['\n','\r\n']:
-            continue
-        #print(sentence)
-        single_log={}
-        try:
-            single_log['date']=datetime.strptime(sentence[:15], "%b %d %H:%M:%S").replace(year=2024)
-        except:
-            # Previous log is continueing
-            log_data[-1]['log']+=sentence
-            continue
-        # The number between date and application name is log level. 
-        # We remove it in now.
-        # ex) [3], [4] 
-        single_log['application']=sentence[sentence.find('%')+1:sentence.find(':',15)]
-        single_log['log']=sentence[sentence.find(':',15)+2:]
-        if single_log['log'].startswith('adt') or  single_log['log'].startswith('FAN'):
-            continue
-        log_data.append(single_log)
-    return log_data
-
-def read_log_files(file_path='.'):
-    file_list = os.listdir(file_path)
-    excel_list=[]
-    for file in file_list[:]:
-        if file.endswith('log'):
-            continue
-        if file.startswith('SNIC'):
-            file_list.remove(file)
-        if not file.endswith('txt') and not file.startswith('messages'):
-            file_list.remove(file)
-            if file.endswith('xlsx'):
-                excel_list.append(file)
-        if file.startswith('ubi'):
-            file_list.remove(file)
-    log_data = []
-    for file in file_list:
-        tmp_log_data=read_file(file_path+'/'+file)
-        log_data.extend(tmp_log_data)
-    for file in excel_list:
-        #print(file)
-        df = pds.read_excel(file_path+'/'+file,header=None, engine='openpyxl')
-        for column in df.columns:
-            li=df[column].dropna().values.tolist()
-            for sentence in li:
-                log_data.append(pre_process(sentence))
-    print(f'read total {len(log_data)} lines of logs')
-    return log_data
+data_dir = 'evaluation_data'
 
 ###########################
 # Making vocab dictionary #
@@ -102,14 +28,16 @@ def read_log_files(file_path='.'):
 def make_dict(log_data):
     log_dict={}
     for single_log_data in log_data:
-        sentence_words=[words for words in  re.sub(r'[0-9]+','',single_log_data['log']).lower().translate(translator).split()]
-        for word in sentence_words:
-            if word in log_dict:
-                log_dict[word]+=1
-            else:
-                log_dict[word]=1
+        for single_log in single_log_data:
+            sentence_words=[words for words in  re.sub(r'[0-9]+','',single_log['log']).lower().translate(translator).split()]
+            #print(sentence_words)
+            for word in sentence_words:
+                if word in log_dict:
+                    log_dict[word]+=1
+                else:
+                    log_dict[word]=1
     for word in list(log_dict.keys())[:]:
-        if log_dict[word]<3 and not word in except_word_list:
+        if log_dict[word]<2 and not word in except_word_list:
             del log_dict[word]
         elif word.startswith('/'):
             del log_dict[word]
@@ -181,19 +109,18 @@ def print_pattern(single_pattern):
 
 def make_log_pattern_dict(log_data, log_dict):
     log_patterns={}
-
     #translator = str.maketrans(string.punctuation , ' '*(len(string.punctuation)))
     for single_log_data in log_data:
-        #sentence_words=[words for words in  re.sub(r'[0-9]+','',single_log_data['log']).lower().translate(translator).split()]
-        single_pattern=log_parser(single_log_data, log_dict)
-        if single_pattern ==[]:
-            continue
-        #if sentence_words[0]=='area':
-        #    print(sentence_words)
-        if not single_pattern in log_patterns:
-            log_patterns[single_pattern]=1
-        else:
-            log_patterns[single_pattern]+=1
+        for single_log in single_log_data:
+            single_pattern=log_parser(single_log, log_dict)
+            if single_pattern ==[]:
+                continue
+            #if sentence_words[0]=='area':
+            #    print(sentence_words)
+            if not single_pattern in log_patterns:
+                log_patterns[single_pattern]=1
+            else:
+                log_patterns[single_pattern]+=1
     log_patterns_sorted=sorted(log_patterns.items(), key=lambda x: x[1], reverse=True)
     print('\n########################################')
     print('Here are most frequent log patterns')
@@ -305,7 +232,7 @@ def calculate_tf_idf(log_data, log_dict, log_patterns):
     # add all value in log_patterns dictionary
     num_all_log=sum(single_log[1] for single_log in log_patterns)
     num_all_doc=len(log_data)+2
-
+    print(num_all_log, num_all_doc)
     # let's calcurate tf-idf of all patterns
     tf_idf=[0 for _ in range(len(log_patterns))]
     for single_file_data in log_data:
@@ -334,21 +261,51 @@ def calculate_tf_idf(log_data, log_dict, log_patterns):
     plt.plot(x, tf_idf, ':', label='tf-idf')
     plt.legend()
     plt.xlabel('log pattern num.')
-    plt.savefig('../results/tf_idf_result.png')
+    plt.savefig(data_dir+'/tf_idf_result.png')
     plt.clf()
     return tf_idf, num_all_doc, num_all_log
 
+def tf_idf(single_log_data, log_dict, log_patterns, tf_idf_variable, synant_dict=None):
+    tf_idf, num_all_doc, num_all_log = tf_idf_variable
+    logs_tf_idf=[]
+    for single_log in single_log_data:
+        single_pattern=log_parser(single_log, log_dict)
+        if single_pattern==[]:continue
+        pattern_num=find_pattern_num(single_pattern, log_patterns)
+        if pattern_num is None:
+            log_patterns.append((single_pattern, 1))
+            tf=ln(num_all_log+1/2)
+            idf=num_all_doc+1/2
+            # New event, so denominator is 2.
+            tf_idf.append(ln(tf*idf))
+            logs_tf_idf.append(ln(tf*idf))
+            continue
+        logs_tf_idf.append(tf_idf[pattern_num-1])
+    return logs_tf_idf
 if __name__ == "__main__":
-    log_data=read_log_files()
-    log_dict=make_dict(log_data)
-    log_patterns=make_log_pattern_dict(log_data, log_dict)
-    event_list=classify_pattern_to_events(log_patterns)
-    interface_up_down_patterns=[_[0] for _ in log_patterns[:2]]
+    with open(f'{data_dir}/processed_log.json', 'r') as f:
+        log_data = json.load(f)
+    with open(f"{data_dir}/bad_log_linked.json", 'r') as f:
+        bad_log_data = json.load(f)
+    bad_log_list= [log['log'] for log in bad_log_data]
+    normal_log_data=[]
+    for logs in log_data:
+        single_logs=[]
+        for log in logs:
+            if not log in bad_log_list:
+                single_logs.append({'log':log})
+        if len(single_logs)>0:
+            normal_log_data.append(single_logs)
+    print(f'We have {len(normal_log_data)} number of normal logs data')
+    log_dict, synant_dict=make_dict(normal_log_data)
+    log_patterns=make_log_pattern_dict(normal_log_data, log_dict)
+    event_list=classify_pattern_to_events(log_patterns, use_synant=synant_dict, print_resuts=True)
+    #interface_up_down_patterns=[_[0] for _ in log_patterns[:2]]
     print('\n#####################################################')
     print("Let's select logs randomly, and putting in log parser")
     print('#####################################################\n')
     for _ in range(5):
-        log=random.choice(log_data)
+        log=random.choice(random.choice(normal_log_data))
         pattern=log_parser(log,log_dict)
         #if pattern in interface_up_down_patterns:
         #    continue
@@ -357,3 +314,8 @@ if __name__ == "__main__":
         print_pattern(pattern)
         print(f'event : event {find_event_num(pattern,event_list)}')
         print('-----------------------------------------------------------')
+    tf_idf, num_all_doc, num_all_log = calculate_tf_idf(normal_log_data, log_dict, log_patterns)
+    tf_idf_data = (log_patterns, log_dict, synant_dict, log_patterns, tf_idf, num_all_doc, num_all_log)
+    with open(data_dir+'/tf_idf_data.pkl', 'wb') as f:
+        pkl.dump(tf_idf_data, f)
+    print(f'tf-idf data is saved in {data_dir}/tf_idf_data.pkl')

@@ -5,9 +5,15 @@ from sentence_transformers import SentenceTransformer
 import chromadb
 import uuid
 import re
+import log_tf_idf
+import pickle as pkl
 
 logging_file_rag = 'log_rag.txt'
-
+data_dir = 'evaluation_data'
+with open(data_dir+'/tf_idf_data.pkl', 'rb') as f:
+    tf_idf_data = pkl.load(f)
+    log_patterns, log_dict, synant_dict, log_patterns, tf_idf, num_all_doc, num_all_log = tf_idf_data
+tf_idf_threshold= max(tf_idf)
 def remove_excess_escapes(log: str) -> str:
     # backslash remove
     log = re.sub(r'\\{2,}', r'\\', log)
@@ -92,13 +98,28 @@ def RAG_init(db_names, embed_model='all-MiniLM-L6-v2', new = False):
             collection.add(documents=[doc["text"]], embeddings=[embedding], metadatas=[{'title':doc['title'], 'db_name': doc['db_name']}], ids=[str(uuid.uuid4())])
     return collection, embed_model
 
-def RAG_search(query, collection, embed_model, logging_=False, n_results=1, vnf_name=None):
+def RAG_search(query, collection, embed_model, logging_=False, n_results=1, vnf_name=None, use_tf_idf=False):
     # vector search only now.
     # Todo: Graph based search
     '''if 'exit code' in str(query):
         return '' '''# It returned nothing if container exit code is delivered. not need from now on. it's related to errorcode with 33.    
-
     query = log_pre_processing(query)
+    if use_tf_idf:
+        single_log_data = query.split('\n')
+        single_log_data = [{'log': log} for log in single_log_data]
+        tf_idf_values = (tf_idf, num_all_doc, num_all_log)
+        tf_idf_results = log_tf_idf.tf_idf(single_log_data, log_dict, log_patterns, tf_idf_values, synant_dict)
+        abnormal_logs=[]
+        #print(threshold, tf_idf_results)
+        for i in range(len(tf_idf_results)):
+            if tf_idf_results[i]> tf_idf_threshold:
+                abnormal_logs.append(single_log_data[i]['log'])
+        if len(abnormal_logs) > 0:
+            #print('**find abnormal log' + str(len(abnormal_logs)))
+            query = '\n'.join(abnormal_logs)
+        else:
+            #print('**no abnormal log found')
+            pass
     query_embedding = embed_model.encode(str(query)).tolist()
 
     results = collection.query(query_embeddings=[query_embedding], n_results=n_results)

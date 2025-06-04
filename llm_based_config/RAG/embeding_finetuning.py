@@ -22,7 +22,18 @@ train_loss = losses.MultipleNegativesRankingLoss(model)
 model.fit(
     train_objectives=[(train_dataloader, train_loss)],
     epochs=20,
-    warmup_steps=10,
+    warmup_steps=20,
     output_path='./fine_tuned_model/all-MiniLM-L6-v2-finetuned'
 )
-print ('Model fine-tuned and saved successfully.')
+print ('all-MiniLM Model fine-tuned and saved successfully.')
+
+''' # Fine tuning inf-retriever-v1 model failed because of CUDA memory lack
+model = SentenceTransformer("infly/inf-retriever-v1", trust_remote_code=True)
+train_loss = losses.MultipleNegativesRankingLoss(model)
+
+model.fit(
+    train_objectives=[(train_dataloader, train_loss)],
+    epochs=20,
+    warmup_steps=20,
+    output_path='./fine_tuned_model/inf-retriever-v1-finetuned'
+)'''
