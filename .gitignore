@@ -2,9 +2,9 @@ llm_based_config/clouds.yaml
 llm_based_config/OpenStack_Conf
 llm_based_config/K8S_Conf
 */secret.py
-*/log.txt
+*/*log.txt
 conda.yaml
-log_*.txt
+*log_*.txt
 */test.py
 test*
 already_done.py

@@ -7,7 +7,7 @@ from already_done import already_done
 #from langchain.chat_models import ChatOpenAI
 from langchain_openai import ChatOpenAI # to use o3-mini, use langchain_openai 0.3.x 
 import argparse
-from kubernetes import client, config, stream
+from kubernetes import client, config
 
 from docx import Document
 import os
@@ -26,11 +26,6 @@ from openstack_config import *
 from kubernetes_config import *
 import sys
 import json
-
-import requests
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
-import torch
 
 logging.getLogger("paramiko").setLevel(logging.CRITICAL) 
 
@@ -441,6 +436,8 @@ if __name__ == '__main__':
     #if not floating_server:
     #    print('Make flaoting IP failed')
     #    exit()
+
+    # TODO: Maybe someday, next part must be another module that take llms and mops 
     for mop_file in tqdm(mop_list):
         if argparser.skip:    
             if mop_file in already_done:
