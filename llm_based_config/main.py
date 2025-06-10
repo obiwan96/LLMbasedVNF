@@ -353,7 +353,7 @@ if __name__ == '__main__':
                                             f.write(' '.join([str(doc['distance']) for doc in retrieved_docs])+'\n')
                                             f.write(retrieved_texts+'\n')
                             if argparser.mad:
-                                llm_responses = '\n'.join ([mad_dict[model] for debate_model in repre_model_list if not debate_model==model])
+                                llm_responses = '\n'.join ([mad_dict[debate_model] for debate_model in repre_model_list if not debate_model==model])
                                 request_message += 'And here are the responses of other LLM models. Refer to it.\n' + llm_responses + '\n'
                             if request_message =='':
                                 request_message='Please correct your code and return the updated version by refering MOP again to configure VNF correctly.\n'

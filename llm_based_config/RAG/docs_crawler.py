@@ -8,6 +8,7 @@ import json
 import os
 from stackapi import StackAPI
 import sys
+from neo4j import GraphDatabase
 
 
 def create_table(db_name):
@@ -74,7 +75,7 @@ def crawl_openstack_page(url, cursor, conn, visited, logging=False):
         print(f"Error crawling {url}: {e}")
     return True
 
-def crawl_kube_page(url, cursor, conn, visited, logging=False):
+def crawl_kube_page(url, cursor, conn, visited, neo_driver, logging=False):
     if url in visited:
         if logging:
             print('already visited!')
@@ -100,6 +101,11 @@ def crawl_kube_page(url, cursor, conn, visited, logging=False):
                 print(content[:30])
             cursor.execute('INSERT INTO documents (url, title, content) VALUES (?, ?, ?)', (url, big_title, content))
             conn.commit()
+            with neo_driver.session() as session:
+                session.run(
+                    "MERGE (d:Document {content: $title})",
+                    title=big_title
+                )
 
             # Let's find small documents
             content = soup.find_all(class_="td-content")
@@ -117,7 +123,15 @@ def crawl_kube_page(url, cursor, conn, visited, logging=False):
                                 print(content[:50])
                             cursor.execute('INSERT INTO documents (url, title, content) VALUES (?, ?, ?)', (url, title, content))
                             conn.commit()
-                            print(f"Crawled: {title}")
+                            with neo_driver.session() as session:
+                                session.run(
+                                    "MERGE (d:Document {content: $title})",
+                                    title=title
+                                )
+                                session.run('MATCH (a:Document {content: "'+ big_title + \
+                                    '"}), (b:Document {content: "'+ title + \
+                                    '"})\nCREATE (a)-[:DESCRIBES]->(b)')
+                            print(f"Crwled: {title}")
                             current_paragraph = []
                         current_title = elem.get_text(strip=True)
 
@@ -150,16 +164,25 @@ def crawl_kube_page(url, cursor, conn, visited, logging=False):
                     if not 'https://' in href or not 'docs' in href:
                         continue
                     
-                    if not crawl_kube_page(href, cursor, conn, visited, logging):
+                    small_title = crawl_kube_page(href, cursor, conn, visited, neo_driver, logging)
+                    if small_title==False:
                         print(url, href)
+                    elif small_title ==True:
+                        continue
+                    else:
+                        # Graph making in Neo4j
+                        with neo_driver.session() as session:
+                            session.run('MATCH (a:Document {content: "'+ big_title + \
+                                '"}), (b:Document {content: "'+ small_title + \
+                                '"})\nCREATE (a)-[:MENTIONS]->(b)')
 
         time.sleep(1.5) 
 
     except Exception as e:
         print(f"Error crawling {url}: {e}")
-    return True
+    return big_title
 
-def crawl_ansible_page(url, cursor, conn, visited_urls, logging=False):
+def crawl_ansible_page(url, cursor, conn, visited_urls, neo_driver, logging=False):
     base_link = 'https://docs.ansible.com/ansible/latest/'
     response = requests.get(url, timeout=1)
 
@@ -332,6 +355,9 @@ def input_several_lines(prompt):
     text = sys.stdin.read()
     return text
 
+def delete_all(tx):
+    tx.run("MATCH (n) DETACH DELETE n")
+
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--openstack', action='store_true', help='Crawl OpenStack docs')
@@ -343,6 +369,8 @@ if __name__=='__main__':
     parser.add_argument('--take-up', action='store_true', help='Take up the last crawl state')
     parser.add_argument('--logging', action='store_true', help='Logging or not')
     parser.add_argument('--manual-add', action='store_true', help='Manually add documents to the database')
+    
+    neo_driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "asdf1234"))
     
     args = parser.parse_args()
     if args.manual_add:
@@ -397,17 +425,19 @@ if __name__=='__main__':
         print(f'Total {len(visited_urls)} nums of doc. crawled.')
         conn.close()
     if args.kubernetes or args.all:
+        with neo_driver.session() as session:
+            session.write_transaction(delete_all)
         conn, cursor = create_table('kubernetes_docs.db')
         start_url = "https://kubernetes.io/docs/home/"
         visited_urls = set()
-        crawl_kube_page(start_url, cursor, conn, visited_urls, args.logging)
+        crawl_kube_page(start_url, cursor, conn, visited_urls, neo_driver, args.logging)
         print(f'Total {len(visited_urls)} nums of doc. crawled.')
         conn.close()
     if args.ansible or args.all:    
         conn, cursor = create_table('ansible_docs.db')   
         visited_urls = set()
         start_url = "https://docs.ansible.com/ansible/latest/index.html"
-        crawl_ansible_page(start_url, cursor, conn,visited_urls, args.logging)
+        crawl_ansible_page(start_url, cursor, conn,visited_urls, neo_driver, args.logging)
         print(f'Total {len(visited_urls)} nums of doc. crawled.')
         conn.close()
     if args.stack or args.all:    
