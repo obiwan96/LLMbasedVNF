@@ -78,13 +78,20 @@ if __name__ == "__main__":
         log_ground_truth = json.load(f)
     print('tf-idf')
     test_RAG(collection, embed_model, log_ground_truth, data, use_tf_idf=True)
-    print('all-MiniLM-L6-v2')
-    test_RAG(collection, embed_model, log_ground_truth, data)
 
-    print("inf-retriever-v1 model")
-    collection, embed_model = RAG_init(db_list, embed_model='infly')
+    print('all-MiniLM-L6-v2')
     test_RAG(collection, embed_model, log_ground_truth, data)
 
     print('fine-tuned all-MiniLM-L6-v2 model')
     collection, embed_model = RAG_init(db_list, embed_model='fine-tuned')
     test_RAG(collection, embed_model, log_ground_truth, data)
+
+    print("fine-tuned and log-tf-idf")
+    test_RAG(collection, embed_model, log_ground_truth, data, use_tf_idf=True)
+
+    print("inf-retriever-v1 model")
+    collection, embed_model = RAG_init(db_list, embed_model='infly')
+    test_RAG(collection, embed_model, log_ground_truth, data)
+
+    print("inf-retriever-v1 model and log-tf-idf")
+    test_RAG(collection, embed_model, log_ground_truth, data, use_tf_idf=True)

@@ -20,7 +20,7 @@ date_word_list=['jan', 'feb', 'mar', 'apr','may', 'jun', 'jul', 'aug', 'sep', 'o
 except_word_list=['fail', 'expected','disabled', 'old', 'new','group','address', 'warnings', 'output']
 loc_word_list=['jincheon', 'jangseongbaegam', 'hyehwa','woosan','jangseong','yeongcheon', 'yangsa', 'jangseongbaeg' ]
 translator = str.maketrans(string.punctuation.replace('/',''), ' '*(len(string.punctuation)-1))
-data_dir = 'evaluation_data'
+data_dir = 'RAG/evaluation_data'
 
 ###########################
 # Making vocab dictionary #

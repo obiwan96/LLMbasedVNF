@@ -1,11 +1,5 @@
-from langchain_community.llms import Ollama
-#from langchain.llms import OpenAI
-from langchain.chains import ConversationChain
-from langchain.memory import ConversationBufferMemory
-from secret import OPENAI_API_KEY, JUMP_HOST_IP, JUMP_HOST_PWD
 from already_done import already_done
 #from langchain.chat_models import ChatOpenAI
-from langchain_openai import ChatOpenAI # to use o3-mini, use langchain_openai 0.3.x 
 import argparse
 from kubernetes import client, config, stream
 
@@ -57,6 +51,7 @@ if __name__ == '__main__':
     # TRL-PPO for RLHF
     # TRL 0.10.1 only support gpt-2
     model = 'EleutherAI/gpt-neox-20b' 
+    #model = 'gpt2'
     tokenizer = AutoTokenizer.from_pretrained(model)
     max_len = tokenizer.model_max_length
     tokenizer.add_special_tokens({"pad_token": tokenizer.eos_token})

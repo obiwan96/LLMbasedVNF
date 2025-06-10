@@ -5,11 +5,11 @@ from sentence_transformers import SentenceTransformer
 import chromadb
 import uuid
 import re
-import log_tf_idf
+from . import log_tf_idf
 import pickle as pkl
 
 logging_file_rag = 'log_rag.txt'
-data_dir = 'evaluation_data'
+data_dir = 'RAG/evaluation_data'
 with open(data_dir+'/tf_idf_data.pkl', 'rb') as f:
     tf_idf_data = pkl.load(f)
     log_patterns, log_dict, synant_dict, log_patterns, tf_idf, num_all_doc, num_all_log = tf_idf_data
