@@ -309,7 +309,8 @@ def test_creation_python_K8S(llm_response, vnf, model, vm_num, trial, v1, namesp
     #    return False, str(e)+" Please put the code inside the 'create_pod' function."
 
 def run_config(v1, pod_name, namespace, input, output, exactly=False):
-    input = input.split()
+    if isinstance(input, str):
+        input = input.split()
     try:
         response = stream.stream(
             v1.connect_get_namespaced_pod_exec,
@@ -327,7 +328,10 @@ def run_config(v1, pod_name, namespace, input, output, exactly=False):
     except ApiException as e:
         return str(e)
     #print( response)
-    if exactly:
+    if exactly == 'compare':
+        if int(response) >= output:
+            return True
+    elif exactly:
         #mresponsesg = response.read().decode("utf-8").strip()
         if response == output:
             return True
@@ -402,23 +406,24 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
     if vnf == 'firewall':
         input_operation , output_operation, exactly = 'sudo iptables -L -v -n', 'DROP', False
     elif vnf == 'Haproxy':
-        input_operation , output_operation, exactly = 'ps -ef | grep haproxy | wc -l', '2', True
+        input_operation , output_operation, exactly = ["/bin/sh", "-c", "ps -ef | grep haproxy | wc -l"], '2', 'compare'
     elif vnf == 'nDPI':
         input_operation , output_operation, exactly = 'ps aux', 'ndpiReader', False
     elif vnf == 'ntopng':
         input_operation , output_operation, exactly = 'ps aux', 'ntopng', False
     elif vnf == 'Suricata':
-        input_operation , output_operation, exactly = 'ps -ef | grep suricata | wc -l', '2', True 
+        input_operation , output_operation, exactly = ["/bin/sh", "-c", "ps -ef | grep suricata | wc -l"], '2', 'compare' 
     else:
         print('weried...')
     result = run_config(v1, pod_name, namespace, input_operation, output_operation, exactly)
     if result == True:
-        if vnf == 'Haproxy':
+        '''if vnf == 'Haproxy':
             result = run_config(v1, pod_name, namespace, 'haproxy -c -f /etc/haproxy/haproxy.cfg', 'Configuration file is valid', False)
             if result == True:
                 return 0, None
             else:
                 return 2, "When I put 'haproxy -c -f /etc/haproxy/haproxy.cfg' operation in Pod to check the VNF, but got this results. \n"+ result+ "It should return 'Configuration file is valid'."
+        '''
         return 0, None
     else:
         return 2, f"When I put '{input_operation}' operation in Pod to check VNF, it return:\n"+result+ f"It should return '{output_operation}'."

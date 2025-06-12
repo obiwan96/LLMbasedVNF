@@ -229,6 +229,11 @@ def crawl_ansible_page(url, cursor, conn, visited_urls, neo_driver, logging=Fals
                     print(content)
                 cursor.execute('INSERT INTO documents (url, title, content) VALUES (?, ?, ?)', (url, big_title+' / '+title, content))
                 conn.commit()
+                with neo_driver.session() as session:
+                    session.run(
+                        "MERGE (d:Document {content: $title})",
+                        title=big_title
+                    )
 
         print(f"Crawled: {title}, url: {base_link+link}")
         time.sleep(1.5)     
@@ -424,9 +429,10 @@ if __name__=='__main__':
         crawl_openstack_page(start_url, cursor, conn, visited_urls, args.logging)
         print(f'Total {len(visited_urls)} nums of doc. crawled.')
         conn.close()
-    if args.kubernetes or args.all:
+    if args.kubernetes or args.ansible or  args.all:
         with neo_driver.session() as session:
             session.write_transaction(delete_all)
+    if args.kubernetes or args.all:
         conn, cursor = create_table('kubernetes_docs.db')
         start_url = "https://kubernetes.io/docs/home/"
         visited_urls = set()

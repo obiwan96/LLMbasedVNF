@@ -27,6 +27,7 @@ from kubernetes_config import *
 import sys
 import json
 from mad import *
+import random
 
 logging.getLogger("paramiko").setLevel(logging.CRITICAL) 
 
@@ -49,6 +50,7 @@ if __name__ == '__main__':
     argparser.add_argument('--judge', action='store_true', help= 'judge LLM in RAG')
     argparser.add_argument('--log-generating', action='store_true', help='Only for log data generating')
     argparser.add_argument('--mad', action='store_true', help='multi-agent-debate when wrong answer')
+    argparser.add_argument('--example-num', type=int, default=2, help='Number of examples to put as prompts')
 
     argparser=argparser.parse_args()
     if argparser.OpenStack:
@@ -59,7 +61,8 @@ if __name__ == '__main__':
     mop_file_path = '../mop/Intergrated/'
     system_name='OpenStack' if argparser.OpenStack else 'Kubernetes'
     form='Python' if argparser.Python else 'Ansible'
-    prompts_1, prompts_2, example_code = prompt(form, system_name) # Prompots for each language and system.
+    prompts_1, prompts_2, example_data = prompt(form, system_name) # Prompots for each language and system.
+    good_example, good_example_prefix, goood_example_suffix = example_data
     #mop_list = [file_name for file_name in os.listdir(mop_file_path) if system_name in file_name ]
     mop_list = [file_name for file_name in os.listdir(mop_file_path)]
     if argparser.test:
@@ -117,7 +120,7 @@ if __name__ == '__main__':
     }
     if argparser.debate:
         model_list = ["llama3.3", "qwen2.5-coder:32b", "gemma3:27b", "qwq"]
-        prompts = (prompts_1, prompts_2, example_code)
+        prompts = (prompts_1, prompts_2, example_data)
         multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,system_name, prompts, logging_, maximum_tiral, argparser.RAG)
         sys.exit()
     if argparser.RAG:
@@ -193,6 +196,10 @@ if __name__ == '__main__':
         else:
             success_num_by_vnf[vnf]['total_num'] += 1
         
+        example_code_list = [example + ':\n'+ good_example[example] for example in good_example if not vnf.lower() in example.lower()] 
+        example_code = '\n'.join(random.sample(example_code_list, min(len(example_code_list), argparser.example_num)))
+        example_code = good_example_prefix + example_code + goood_example_suffix
+
         # Parameters for VM creation
         vm_name = 'vm-'+vnf+'-'+str(vm_num[vnf])
         mop=''
@@ -210,6 +217,7 @@ if __name__ == '__main__':
                 #print(model)
                 #print(mad_dict[model])
             mad_spend_time = time.time() - mad_start_time
+            print(f'MAD spend time: {mad_spend_time:.2f} seconds')
         for model in model_list:
             if logging_:
                 with open(logging_file, 'a') as f:

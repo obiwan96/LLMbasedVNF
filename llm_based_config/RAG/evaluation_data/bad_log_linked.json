@@ -540,10 +540,6 @@
         "title": "haproxy: command not found"
     },
     {
-        "log": "29/5/2025 -- 20:23:57 - <Error> -- The configuration file must begin with the following two lines: %YAML 1.1 and ---",
-        "title": "Suricata fails with config error"
-    },
-    {
         "log": "ERROR: '~ntop' user or team does not exist.",
         "title": "Cannot add PPA - \"user or team does not exist\""
     },
@@ -678,10 +674,6 @@
     {
         "log": "/bin/bash: line 9: ntopng: command not found",
         "title": "haproxy: command not found"
-    },
-    {
-        "log": "]\",\"reason\":\"Invalid\",\"details\":{\"name\":\"firewall-pod\",\"kind\":\"Pod\",\"causes\":[{\"reason\":\"FieldValueInvalid\",\"message\":\"Invalid value: \"BestEffort\": Pod QoS is immutable\",\"field\":\"metadata\"},{\"reason\":\"FieldValueForbidden\",\"message\":\"Forbidden: pod updates may not change fields other than `spec.containers[*].image`,`spec.initContainers[*].image`,`spec.activeDeadlineSeconds`,`spec.tolerations` (only additions to existing tolerations),`spec.terminationGracePeriodSeconds` (allow it to be set to 1 if it was previously negative)",
-        "title": "sip"
     },
     {
         "log": "Cannot initiate the connection to archive.ubuntu.com:80 (2620:2d:4000:1::19). - connect (101: Network is unreachable) Cannot initiate the connection to archive.ubuntu.com:80 (2620:2d:4000:1::16). - connect (101: Network is unreachable) Cannot initiate the connection to archive.ubuntu.com:80 (2620:2d:4000:1::101). - connect (101: Network is unreachable) Cannot initiate the connection to archive.ubuntu.com:80 (2620:2d:4000:1::102). - connect (101: Network is unreachable) Cannot initiate the connection to archive.ubuntu.com:80 (2620:2d:4000:1::103). - connect (101: Network is unreachable) Could not connect to archive.ubuntu.com:80 (185.125.190.39), connection timed out Could not connect to archive.ubuntu.com:80 (185.125.190.81), connection timed out Could not connect to archive.ubuntu.com:80 (185.125.190.82), connection timed out Could not connect to archive.ubuntu.com:80 (185.125.190.36), connection timed out [IP: 185.125.190.39 80]",
@@ -840,10 +832,6 @@
         "title": "failed to apply firewall rules with iptables-restore"
     },
     {
-        "log": "iptables: Chain already exists",
-        "title": "Iptables: Chain already exists."
-    },
-    {
         "log": "iptables v1.8.7: unknown option \"--dport\"",
         "title": "iptables error: unknown option --dport"
     },
@@ -854,10 +842,6 @@
     {
         "log": "iptables: Resource temporarily unavailable",
         "title": "What can cause a \u201cResource temporarily unavailable\u201d on sock send() command"
-    },
-    {
-        "log": "CrashLoopBackOff: back-off restarting failed container",
-        "title": "My kubernetes pods keep crashing with \"CrashLoopBackOff\" but I can't find any log"
     },
     {
         "log": "FailedScheduling: 0/5 nodes are available: insufficient memory.",

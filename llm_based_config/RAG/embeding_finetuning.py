@@ -18,11 +18,13 @@ for item in log_ground_truth:
 train_dataloader = DataLoader(train_examples, shuffle=True, batch_size=16)
 
 train_loss = losses.MultipleNegativesRankingLoss(model)
-
+epochs=20
+total_steps = len(train_dataloader) * epochs
+warmup_steps = int(total_steps * 0.1)  # 10% of total steps
 model.fit(
     train_objectives=[(train_dataloader, train_loss)],
-    epochs=20,
-    warmup_steps=20,
+    epochs=epochs,
+    warmup_steps=warmup_steps,
     output_path='./fine_tuned_model/all-MiniLM-L6-v2-finetuned'
 )
 print ('all-MiniLM Model fine-tuned and saved successfully.')

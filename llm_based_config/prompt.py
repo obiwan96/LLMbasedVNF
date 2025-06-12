@@ -38,13 +38,15 @@ def prompt(lang, system):
     else:
         print('Currently, only supporting Python and Ansible. Specify which one you use.')
         sys.exit(0)
-    good_example_str=''
-    for example in good_example:
-        good_example_str += example+':\n'+good_example[example] +'\n'
-    good_example_str +="\nPlease rememeber, these are example code, so you have to just refer to them. For detailed VNF setup methods and parameters, follow the upper description, not the example code."
+    print (f"Good example code for {lang} in {system} is readed. {len(good_example)} files found.")
+    good_example_prefix=''
+    good_example_suffix=''
+    '''for example in good_example:
+        good_example_str += example+':\n'+good_example[example] +'\n' '''
+    good_example_str ="\nPlease rememeber, these are example code, so you have to just refer to them. For detailed VNF setup methods and parameters, follow the upper description, not the example code."
     if lang == 'Python':
         if system == 'OpenStack':
-            good_example_str = "Here are 'example' codes to create and configurate a VNF in OpenStack using python with openstacksdk. \n" + good_example_str
+            good_example_prefix = "Here are 'example' codes to create and configurate a VNF in OpenStack using python with openstacksdk. \n"
             prompts_1 = '''You are an OpenStack cloud expert. '''+ \
             f'''\nPlease rememeber, these are example code, so you have to just refer to them. For detailed VNF setup methods and parameters, follow the following description, not the example code.
             OpenStack server and authentication details are in config file. Cloud name is '{cloud_name}'.
@@ -71,7 +73,7 @@ def prompt(lang, system):
 
         # Kubernetes Python code part is just copy version of OpenStack. need change.
         elif system == 'Kubernetes':
-            good_example_str = "Also, here are 'example' codes to create and configure a VNF in Kubernetes using Python with Kubernetes library for reference. \n" + good_example_str
+            good_example_prefix = "Also, here are 'example' codes to create and configure a VNF in Kubernetes using Python with Kubernetes library for reference. \n" 
             prompts_1 = f'''You are an Kubernetes cloud expert. 
             Please write Python code that creates a Kubernetes Pod and installs a VNF inside it, taking the following points into consideration.
             You don't have to explain your code. Keep your answer code-focused and as simple as possible.
@@ -101,8 +103,8 @@ def prompt(lang, system):
             return 'need to implement'
         # Let's do Kubernetes Ansible first!
         elif system== 'Kubernetes':
-            good_example_str = "Here are example YAML configuration snippets for creating and configuring a CNF in Kubernetes using Ansible. \n" +\
-                good_example_str + "\nNow, write the YAML code that automates the process described in the MOP, following the above requirements."
+            good_example_prefix = "Here are example YAML configuration snippets for creating and configuring a CNF in Kubernetes using Ansible. \n"
+            good_example_suffix = "\nNow, write the YAML code that automates the process described in the MOP, following the above requirements."
             prompts_1 = '''You are a Kubernetes cloud expert. 
             I will provide you with a Method of Procedure (MOP), which outlines the steps for deploying a Pod in Kubernetes and installing and configuring the CNF specified in the MOP on that Pod.
             Based on this, please write the corresponding Ansible YAML code that automates the installation and configuration process described in the MOP with the following strict requirements:\n'''
@@ -123,4 +125,4 @@ def prompt(lang, system):
             
             Here is the MOP: '''
 
-    return prompts_1, prompts_2, good_example_str
+    return prompts_1, prompts_2, (good_example, good_example_prefix, good_example_suffix)
