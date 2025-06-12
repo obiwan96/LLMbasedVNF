@@ -51,6 +51,8 @@ if __name__ == '__main__':
     argparser.add_argument('--log-generating', action='store_true', help='Only for log data generating')
     argparser.add_argument('--mad', action='store_true', help='multi-agent-debate when wrong answer')
     argparser.add_argument('--example-num', type=int, default=2, help='Number of examples to put as prompts')
+    argparser.add_argument('--RAG-tf-idf', action='store_true', help='Use tf-idf in RAG search')
+    argparser.add_argument('--RAG-finetune', action='store_true', help='Use fine-tuned model in RAG search')
 
     argparser=argparser.parse_args()
     if argparser.OpenStack:
@@ -98,7 +100,7 @@ if __name__ == '__main__':
     if argparser.repre_llms:
         model_list = repre_model_list
     elif not argparser.gpt and not argparser.llama and not argparser.code_llm:
-        model_list= [# "gpt-4o", "o3-mini",  #The money ran out too fast, so left it out for a while
+        model_list= [ "gpt-4o", "o3-mini",  #The money ran out too fast, so left it out for a while
                      "llama3.3", "qwen2.5-coder:32b", "deepseek-r1:70b",
                       "gemma3:27b", "qwq", "phi4", "mistral"]
     num_ctx_list = {
@@ -133,7 +135,10 @@ if __name__ == '__main__':
             db_list.append('RAG/kubernetes_docs.db')
         if argparser.Ansible:
             db_list.append('RAG/ansible_docs.db')
-        collection, embed_model = RAG.RAG_init(db_list)
+        if argparser.RAG_finetune:
+            collection, embed_model = RAG.RAG_init(db_list, embed_model='fine-tuned', new=True)
+        else:
+            collection, embed_model = RAG.RAG_init(db_list, new = True)
         if argparser.judge:
             judge_llm_model_name='llama3.3'
             judge_LLM = Ollama(model=judge_llm_model_name, num_ctx=num_ctx_list[judge_llm_model_name])
@@ -217,12 +222,13 @@ if __name__ == '__main__':
                 #print(model)
                 #print(mad_dict[model])
             mad_spend_time = time.time() - mad_start_time
-            print(f'MAD spend time: {mad_spend_time:.2f} seconds')
+            #print(f'MAD spend time: {mad_spend_time:.2f} seconds')
         for model in model_list:
             if logging_:
                 with open(logging_file, 'a') as f:
                     f.write(f" --- Model: {model}, MOP: {mop_file}, VNF: {vnf}, VM: {vm_num[vnf]}\n")
             spend_time = [0, 0, 0] # [llm response time, vm creation time, vm configuration time]
+            rag_time=0
             start_time = time.time()
             if model.startswith('gpt'):
                 llm = ChatOpenAI(temperature=0, model_name=model)
@@ -291,6 +297,10 @@ if __name__ == '__main__':
                         delete_pod(v1, server_or_message, namespace)
                     if second_test_result == 0:
                         # TODO: OpenStack module still return 'True' if succeed.
+                        if argparser.RAG:
+                            spend_time.append(rag_time)
+                        if argparser.mad:
+                            spend_time.append(mad_spend_time)
                         process_time[model].append(spend_time)
                         success_num_by_vnf[vnf]['success_num'] += 1
                         config_success_num[lang][model] += 1
@@ -337,8 +347,9 @@ if __name__ == '__main__':
                                 f.write('Config test failled. Results:\n')
                                 f.write(second_message+'\n')
                             if  argparser.RAG and second_test_result in [30, 33]:
-                                # VNF configuration related docs are not crawled yet. only StackOverflow                            
-                                retrieved_docs=RAG.RAG_search(second_message, collection, embed_model, logging_, vnf_name=vnf)
+                                # VNF configuration related docs are not crawled yet. only StackOverflow
+                                rag_start_time = time.time()                           
+                                retrieved_docs=RAG.RAG_search(second_message, collection, embed_model, logging_, vnf_name=vnf, use_tf_idf = argparser.RAG_tf_idf)
                                 retrieved_texts='And here are some related documents. Please refer to them.\n'
                                 for retrieved_doc in retrieved_docs:
                                     retrieved_texts += retrieved_doc['text']+'\n'
@@ -360,6 +371,7 @@ if __name__ == '__main__':
                                             f.write ('RAG results:\n Distance: ')
                                             f.write(' '.join([str(doc['distance']) for doc in retrieved_docs])+'\n')
                                             f.write(retrieved_texts+'\n')
+                                rag_time += time.time() - rag_start_time
                             if argparser.mad:
                                 llm_responses = '\n'.join ([mad_dict[debate_model] for debate_model in repre_model_list if not debate_model==model])
                                 request_message += 'And here are the responses of other LLM models. Refer to it.\n' + llm_responses + '\n'
@@ -433,6 +445,7 @@ if __name__ == '__main__':
                         if argparser.log_generating and not error_message =='':
                             bad_log_example.append(error_message)
                         if argparser.RAG and not error_message=='':
+                            rag_start_time = time.time()
                             # TODO: currently consider only K8S. need to fix to consider OpenStack also.                            
                             # From now on, RAG will find where is error.
                             '''error_start = check_log_error(str(server_or_message)) 
@@ -441,7 +454,7 @@ if __name__ == '__main__':
                                 retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_, vnf_name=vnf)
                             else:
                                 retrieved_texts=RAG.RAG_search(server_or_message, collection, embed_model, logging_, vnf_name=vnf)'''
-                            retrieved_texts=RAG.RAG_search(error_message, collection, embed_model, logging_, vnf_name=vnf)
+                            retrieved_texts=RAG.RAG_search(error_message, collection, embed_model, logging_, vnf_name=vnf, use_tf_idf = argparser.RAG_tf_idf)
                             if argparser.judge:
                                 judge_result = judge_LLM.invoke(f'''Please determine whether the following text is related to this error message. 
                                     The error message is {error_message}.\n The text to be checked is here. {retrieved_texts}\n Return ‘Yes’ if they are related, or ‘No’ if they are not.''')
@@ -459,6 +472,7 @@ if __name__ == '__main__':
                                     with open(logging_file, 'a') as f:
                                         f.write ('RAG results:\n')
                                         f.write(retrieved_texts+'\n')
+                            rag_time += time.time() - rag_start_time
                         if request_message =='':
                             request_message='Please correct your code and return the updated version by refering MOP again to configure VNF correctly.\n'
                         '''if form=='Python' and 'has no attribute ' in str(server_or_message):
@@ -521,6 +535,13 @@ if __name__ == '__main__':
             print(f"Average LLM process time: {sum([i[0] for i in pr_ti])/tot_num} seconds")
             print(f"Average VM creation time: {sum([i[1] for i in pr_ti])/tot_num} seconds")
             print(f"Average VM configuration time: {sum([i[2] for i in pr_ti])/tot_num} seconds")
+            if argparser.RAG:
+                print(f"Average RAG time: {sum([i[3] for i in pr_ti])/tot_num} seconds")
+                if argparser.mad:
+                    print(f"Average MAD time: {sum([i[4] for i in pr_ti])/tot_num} seconds")
+            elif argparser.mad:
+                print(f"Average MAD time: {sum([i[3] for i in pr_ti])/tot_num} seconds")
+        
         print(f"--------------------------------------------------")
     with open(logging_file_for_vnf, 'a')as f:
         for vnf in success_num_by_vnf:

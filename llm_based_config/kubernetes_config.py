@@ -406,13 +406,13 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
     if vnf == 'firewall':
         input_operation , output_operation, exactly = 'sudo iptables -L -v -n', 'DROP', False
     elif vnf == 'Haproxy':
-        input_operation , output_operation, exactly = ["/bin/sh", "-c", "ps -ef | grep haproxy | wc -l"], '2', 'compare'
+        input_operation , output_operation, exactly = ["/bin/sh", "-c", "ps -ef | grep haproxy | wc -l"], 2, 'compare'
     elif vnf == 'nDPI':
         input_operation , output_operation, exactly = 'ps aux', 'ndpiReader', False
     elif vnf == 'ntopng':
         input_operation , output_operation, exactly = 'ps aux', 'ntopng', False
     elif vnf == 'Suricata':
-        input_operation , output_operation, exactly = ["/bin/sh", "-c", "ps -ef | grep suricata | wc -l"], '2', 'compare' 
+        input_operation , output_operation, exactly = ["/bin/sh", "-c", "ps -ef | grep suricata | wc -l"], 2, 'compare' 
     else:
         print('weried...')
     result = run_config(v1, pod_name, namespace, input_operation, output_operation, exactly)
