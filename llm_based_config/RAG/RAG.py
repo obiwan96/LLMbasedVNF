@@ -120,6 +120,17 @@ def RAG_search(query, collection, embed_model, logging_=False, n_results=1, vnf_
         else:
             #print('**no abnormal log found')
             pass
+    else:
+        # Rule-based error log filtering
+        error_find = False
+        error_logs=[]
+        for log in query.split('\n'):
+            if 'error' in log.lower() or 'ERR' in log or 'Err' in log:
+                error_logs.append(log)
+                error_find = True
+        if error_find:
+            query = '\n'.join(error_logs)
+    
     query_embedding = embed_model.encode(str(query)).tolist()
 
     results = collection.query(query_embeddings=[query_embedding], n_results=n_results)
@@ -128,6 +139,8 @@ def RAG_search(query, collection, embed_model, logging_=False, n_results=1, vnf_
     for i in range(n_results):
         if results['documents'][0][i] in [None, '']:
             break
+        print(results['distances'][0][i])
+        print(type(results['distances'][0][i]))
         retrieved_texts.append({
             'title': results['metadatas'][0][i]['title'],
             'text': results['documents'][0][i],

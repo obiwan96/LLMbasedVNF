@@ -350,27 +350,31 @@ if __name__ == '__main__':
                                 # VNF configuration related docs are not crawled yet. only StackOverflow
                                 rag_start_time = time.time()                           
                                 retrieved_docs=RAG.RAG_search(second_message, collection, embed_model, logging_, vnf_name=vnf, use_tf_idf = argparser.RAG_tf_idf)
-                                retrieved_texts='And here are some related documents. Please refer to them.\n'
+                                retrieved_texts=''
+                                retrieved_well = False
                                 for retrieved_doc in retrieved_docs:
-                                    retrieved_texts += retrieved_doc['text']+'\n'
-                                if argparser.judge:
-                                    judge_result = judge_LLM.invoke(f'''Please determine whether the following text is related to this error message. 
-                                        The error message is {second_message}.\n The text to be checked is here. {retrieved_texts}\n Return ‘Yes’ if they are related, or ‘No’ if they are not.''')
-                                    if logging_:
-                                        with open(logging_file, 'a') as f:
-                                            f.write('RAG results:\n')
-                                            f.write(retrieved_texts+'\n')
-                                            f.write ('Judge result:\n')
-                                            f.write(judge_result+'\n')
-                                    if 'yes' in judge_result.lower():
-                                        request_message +=  retrieved_texts
-                                else:
-                                    request_message +=  retrieved_texts
-                                    if logging_:
-                                        with open(logging_file, 'a') as f:
-                                            f.write ('RAG results:\n Distance: ')
-                                            f.write(' '.join([str(doc['distance']) for doc in retrieved_docs])+'\n')
-                                            f.write(retrieved_texts+'\n')
+                                    if retrieved_doc['distance'] <0.5:
+                                        retrieved_texts += retrieved_doc['text']+'\n'
+                                        retrieved_well = True
+                                if retrieved_well: # If not, RAG failed.
+                                    if argparser.judge:
+                                        judge_result = judge_LLM.invoke(f'''Please determine whether the following text is related to this error message. 
+                                            The error message is {second_message}.\n The text to be checked is here. {retrieved_texts}\n Return ‘Yes’ if they are related, or ‘No’ if they are not.''')
+                                        if logging_:
+                                            with open(logging_file, 'a') as f:
+                                                f.write('RAG results:\n')
+                                                f.write(retrieved_texts+'\n')
+                                                f.write ('Judge result:\n')
+                                                f.write(judge_result+'\n')
+                                        if 'yes' in judge_result.lower():
+                                            request_message +=  'And here are some related docs for error message.\n'+retrieved_texts
+                                    else:
+                                        request_message +=  'And here are some related docs for error message.\n'+retrieved_texts
+                                        if logging_:
+                                            with open(logging_file, 'a') as f:
+                                                f.write ('RAG results:\n Distance: ')
+                                                f.write(' '.join([str(doc['distance']) for doc in retrieved_docs])+'\n')
+                                                f.write(retrieved_texts+'\n')
                                 rag_time += time.time() - rag_start_time
                             if argparser.mad:
                                 llm_responses = '\n'.join ([mad_dict[debate_model] for debate_model in repre_model_list if not debate_model==model])
@@ -454,24 +458,31 @@ if __name__ == '__main__':
                                 retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_, vnf_name=vnf)
                             else:
                                 retrieved_texts=RAG.RAG_search(server_or_message, collection, embed_model, logging_, vnf_name=vnf)'''
-                            retrieved_texts=RAG.RAG_search(error_message, collection, embed_model, logging_, vnf_name=vnf, use_tf_idf = argparser.RAG_tf_idf)
-                            if argparser.judge:
-                                judge_result = judge_LLM.invoke(f'''Please determine whether the following text is related to this error message. 
-                                    The error message is {error_message}.\n The text to be checked is here. {retrieved_texts}\n Return ‘Yes’ if they are related, or ‘No’ if they are not.''')
-                                if logging_:
-                                    with open(logging_file, 'a') as f:
-                                        f.write('RAG results:\n')
-                                        f.write(retrieved_texts+'\n')
-                                        f.write ('Judge result:\n')
-                                        f.write(judge_result+'\n')
-                                if 'yes' in judge_result.lower():
+                            retrieved_docs=RAG.RAG_search(error_message, collection, embed_model, logging_, vnf_name=vnf, use_tf_idf = argparser.RAG_tf_idf)
+                            retrieved_texts=''
+                            retrieved_well = False
+                            for retrieved_doc in retrieved_docs:
+                                if retrieved_doc['distance'] <0.5:
+                                    retrieved_texts += retrieved_doc['text']+'\n'
+                                    retrieved_well = True
+                            if retrieved_well: # If not, RAG failed.                            
+                                if argparser.judge:
+                                    judge_result = judge_LLM.invoke(f'''Please determine whether the following text is related to this error message. 
+                                        The error message is {error_message}.\n The text to be checked is here. {retrieved_texts}\n Return ‘Yes’ if they are related, or ‘No’ if they are not.''')
+                                    if logging_:
+                                        with open(logging_file, 'a') as f:
+                                            f.write('RAG results:\n')
+                                            f.write(retrieved_texts+'\n')
+                                            f.write ('Judge result:\n')
+                                            f.write(judge_result+'\n')
+                                    if 'yes' in judge_result.lower():
+                                        request_message += 'And here are some related docs for error message.\n'+ retrieved_texts
+                                else:
                                     request_message += 'And here are some related docs for error message.\n'+ retrieved_texts
-                            else:
-                                request_message += 'And here are some related docs for error message.\n'+ retrieved_texts
-                                if logging_:
-                                    with open(logging_file, 'a') as f:
-                                        f.write ('RAG results:\n')
-                                        f.write(retrieved_texts+'\n')
+                                    if logging_:
+                                        with open(logging_file, 'a') as f:
+                                            f.write ('RAG results:\n')
+                                            f.write(retrieved_texts+'\n')
                             rag_time += time.time() - rag_start_time
                         if request_message =='':
                             request_message='Please correct your code and return the updated version by refering MOP again to configure VNF correctly.\n'

@@ -347,6 +347,7 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
                       127: 'Command not found, invalid command or not in PATH',
                       128: 'Invalid exit argument, invalid argument to exit',
                       137: 'Container killed, usually due to out of memory (OOM) or manual termination',
+                      139: 'Segmentaion fault, core dump, or memory access violation',
                       143: 'Container terminated by SIGTERM, usually due to manual termination',
                       255: 'Exit status out of range, usually indicates an error in the script or command'}
     # I can't find how to check all commands run well.
@@ -370,7 +371,10 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
                     # Container command end with normal state
                     return 32, (container_name)
                 else:
-                    return 33, (container_name, exit_code, exit_code_dict[exit_code])
+                    if exit_code in exit_code_dict:
+                        return 33, (container_name, exit_code, exit_code_dict[exit_code])
+                    else:
+                        return 33, (container_name, exit_code, "Unknown exit code. Maybe custom exit code.")
             else:
                 pass
         logs = get_pod_logs(v1, pod_name, namespace)
