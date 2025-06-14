@@ -139,8 +139,6 @@ def RAG_search(query, collection, embed_model, logging_=False, n_results=1, vnf_
     for i in range(n_results):
         if results['documents'][0][i] in [None, '']:
             break
-        print(results['distances'][0][i])
-        print(type(results['distances'][0][i]))
         retrieved_texts.append({
             'title': results['metadatas'][0][i]['title'],
             'text': results['documents'][0][i],

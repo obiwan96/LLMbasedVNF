@@ -28,6 +28,7 @@ import sys
 import json
 from mad import *
 import random
+import pickle as pkl
 
 logging.getLogger("paramiko").setLevel(logging.CRITICAL) 
 
@@ -162,6 +163,12 @@ if __name__ == '__main__':
         config_success_num['en'][model] = 0
         process_time[model] = []
     vm_num = {}
+
+    if argparser.skip:
+        if 'middle_result.pkl' in os.listdir('.'):
+            with open('middle_result.pkl', 'rb') as f:
+                middle_data = pkl.load(f)
+            first_create_success_num, create_success_num, first_config_success_num, config_success_num, process_time = middle_data
     total_start_time = time.time() 
     target_datetime = datetime.now(pytz.utc)
     #floating_server = make_new_floating_ip(conn)
@@ -522,9 +529,19 @@ if __name__ == '__main__':
                         f.write(f"Average LLM process time: {sum([i[0] for i in pr_ti])/tot_num} seconds\n")
                         f.write(f"Average VM creation time: {sum([i[1] for i in pr_ti])/tot_num} seconds\n")
                         f.write(f"Average VM configuration time: {sum([i[2] for i in pr_ti])/tot_num} seconds\n")
+                        if argparser.RAG:
+                            f.write(f"Average RAG time: {sum([i[3] for i in pr_ti])/tot_num} seconds\n")
+                            if argparser.mad:
+                                f.write(f"Average MAD time: {sum([i[4] for i in pr_ti])/tot_num} seconds\n")
+                        elif argparser.mad:
+                            f.write(f"Average MAD time: {sum([i[3] for i in pr_ti])/tot_num} seconds\n")
+                        f.write(f"Average Total time: {sum(sum(pr_) for pr_ in pr_ti)/tot_num}\n")
                     f.write(f"--------------------------------------------\n")
         with open(logging_file_for_vnf, 'a')as f:
             f.write(f" --- MOP: {mop_file}, success num: {mop_suc_num}\n")
+        middle_result = [first_create_success_num, create_success_num, first_config_success_num, config_success_num, process_time]
+        with open('middle_result.pkl', 'wb') as f:
+            pkl.dump(middle_result, f)
     
     end_time = time.time()
     #conn.compute.delete_server(floating_server.id)

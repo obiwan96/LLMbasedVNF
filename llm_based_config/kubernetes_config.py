@@ -135,7 +135,11 @@ def test_creation_ansible_K8S(llm_response, vnf, model, vm_num, v1, timeout=300)
         #print('parsing fail')
         return 1, None
     if not yml_code:
-        return 1, None
+        if model != 'o3-mini':
+            return 1, None
+        else:
+            # o3-mini seems not using ``` format!
+            yml_code=[llm_response]
     try:
         pod_name= vnf.lower()+'-pod'
         yaml_data = yaml.safe_load(yml_code[0])
@@ -233,7 +237,11 @@ def test_creation_python_K8S(llm_response, vnf, model, vm_num, trial, v1, namesp
         #print('parsing fail')
         return 1, None
     if not python_code:
-        return 1, None
+        if model != 'o3-mini':
+            return 1, None
+        else:
+            # o3-mini seems not using ``` format!
+            python_code=[llm_response]
     
     file_name = f'config_{vnf}_{model.replace(".","")}_{vm_num}_{trial}.py'
     if 'while True' in python_code[0]:
