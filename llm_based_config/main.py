@@ -154,6 +154,7 @@ if __name__ == '__main__':
     config_success_num = {'ko':{}, 'en':{}}
     success_num_by_vnf={}
     process_time = {}
+    rag_threshold = 0.8
     for model in model_list:
         first_create_success_num[model] = 0
         first_config_success_num[model] = 0
@@ -360,7 +361,7 @@ if __name__ == '__main__':
                                 retrieved_texts=''
                                 retrieved_well = False
                                 for retrieved_doc in retrieved_docs:
-                                    if retrieved_doc['distance'] <0.5:
+                                    if retrieved_doc['distance'] <rag_threshold:
                                         retrieved_texts += retrieved_doc['text']+'\n'
                                         retrieved_well = True
                                 if retrieved_well: # If not, RAG failed.
@@ -469,7 +470,7 @@ if __name__ == '__main__':
                             retrieved_texts=''
                             retrieved_well = False
                             for retrieved_doc in retrieved_docs:
-                                if retrieved_doc['distance'] <0.5:
+                                if retrieved_doc['distance'] <rag_threshold:
                                     retrieved_texts += retrieved_doc['text']+'\n'
                                     retrieved_well = True
                             if retrieved_well: # If not, RAG failed.                            
