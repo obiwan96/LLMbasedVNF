@@ -1,7 +1,6 @@
 from already_done import already_done
 #from langchain.chat_models import ChatOpenAI
 import argparse
-from kubernetes import client, config, stream
 
 from docx import Document
 import os
@@ -9,122 +8,63 @@ os.environ["TRANSFORMERS_CACHE"]        = "/storage1/hf_cache/transformers"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"          # 선택
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-import openstack
 import pytz
 import time
 from tqdm import tqdm
 from datetime import datetime
 import logging
 import time
+import random
+import gc
 
 #from RAG import RAG
+from kubernetes_config import *
+from kubernetes import client, config
+from typing import List, Dict, Optional
+from collections import defaultdict
+
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+import torch
+from trl import (
+    PPOConfig,
+    PPOTrainer,
+    AutoModelForCausalLMWithValueHead,
+    create_reference_model,
+    DPOTrainer,
+    DPOConfig
+)
+from datasets import Dataset
+import numpy as np
+
+#Local modules
 from prompt import prompt, namespace
+prompts_1, prompts_2, example_data = prompt('Python', 'Kubernetes') # Prompots for each language and system.
+good_example, good_example_prefix, goood_example_suffix = example_data
 from openstack_config import * 
 from kubernetes_config import *
-import sys
-import json
 
-from transformers import AutoTokenizer
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
-import torch
 
 logging.getLogger("paramiko").setLevel(logging.CRITICAL) 
+hf_cache_path = '/storage3/hf_cache/'
+bnb_config = BitsAndBytesConfig(load_in_8bit=True)
 
+def shape_reward(r):
+    """Reward shaping: [0,1] → [-1,1]"""
+    return 2 * r - 1
 
-if __name__ == '__main__':
-    argparser = argparse.ArgumentParser()
-    argparser.add_argument('--OpenStack', action='store_true')
-    argparser.add_argument('--K8S', action='store_true')
-    argparser.add_argument('--Ansible', action='store_true')
-    argparser.add_argument('--Python', action='store_true')
-    argparser.add_argument('--RAG', action='store_true')
-    argparser.add_argument('--skip', action='store_true', help= "Skip MOPs in 'already_don.py'. Using when terminating unexpected")
-    argparser.add_argument('--test', action='store_true', help='Test only 3 MOPs for testing')
-    argparser.add_argument('--no-log', action='store_true', help= 'Do not log the result')
-    argparser.add_argument('--judge', action='store_true', help= 'judge LLM in RAG')
+def normalize_rewards(reward_tensor):
+    """Batch 수준 normalization"""
+    mean = reward_tensor.mean()
+    std = reward_tensor.std(unbiased=False)
+    return (reward_tensor - mean) / (std + 1e-6)
 
-    argparser=argparser.parse_args()
-    mop_file_path = '../mop/Intergrated/'
-    system_name='OpenStack' if argparser.OpenStack else 'Kubernetes'
-    form='Python' if argparser.Python else 'Ansible'
-    
-    # TRL-PPO for RLHF
-    # TRL 0.10.1 only support gpt-2
-    model = 'EleutherAI/gpt-neox-20b' 
-    #model = 'gpt2'
-    tokenizer = AutoTokenizer.from_pretrained(model)
-    max_len = tokenizer.model_max_length
-    tokenizer.add_special_tokens({"pad_token": tokenizer.eos_token})
-    llm_model = AutoModelForCausalLMWithValueHead.from_pretrained(model)
-    model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(model)
-    # PPO Configuration
-    ppo_config = PPOConfig(
-        model_name=model,
-        batch_size=1,
-        forward_batch_size=1,
-        log_with=None  # or "wandb"
-    )
-    ppo_trainer = PPOTrainer(
-        config=ppo_config,
-        model=llm_model,
-        ref_model=model_ref,
-        tokenizer=tokenizer
-    )
-
-    # These are same as main 
-    prompts_1, prompts_2, example_code = prompt(form, system_name) # Prompots for each language and system.
-    #mop_list = [file_name for file_name in os.listdir(mop_file_path) if system_name in file_name ]
-    mop_list = [file_name for file_name in os.listdir(mop_file_path)]
-    if argparser.test:
-        mop_list=mop_list[:3]
-    logging_ = not argparser.no_log
-    #openai_client = OpenAI(api_key=OPENAI_API_KEY)
-
-    if argparser.OpenStack:
-        cloud_name = 'postech_cloud'
-        conn = openstack.connect(cloud=cloud_name)
-    elif argparser.K8S:
-        config.load_kube_config()
-        v1 = client.CoreV1Api()
-        apps_v1 = client.AppsV1Api()
-    
-    logging_file = 'RL_log.txt'
-    logging_file_for_vnf = 'RL_log_vnf.txt'
-    with open(logging_file_for_vnf, 'w') as f:
-        f.write('')
-   
-    if argparser.RAG:
-        db_list=['RAG/stackoverflow_docs.db']
-        if argparser.OpenStack:
-            db_list.append('RAG/openstack_docs.db')
-            if argparser.python:
-                db_list.append('RAG/openstacksdk_docs.db')
-        if argparser.K8S:
-            db_list.append('RAG/kubernetes_docs.db')
-        if argparser.Ansible:
-            db_list.append('RAG/ansible_docs.db')
-        collection, embed_model = RAG.RAG_init(db_list)
-        if argparser.judge:
-            judge_llm_model_name='llama3.3'
-            judge_LLM = Ollama(model=judge_llm_model_name, num_ctx=num_ctx_list[judge_llm_model_name])
-    all_mop_num = len(mop_list)
-    first_create_success_num = {}
-    first_config_success_num = {}
-    create_success_num = {'ko':{}, 'en':{}}
-    config_success_num = {'ko':{}, 'en':{}}
-    success_num_by_vnf={}
-    process_time = {}
-    vm_num = {}
-    total_start_time = time.time() 
-    target_datetime = datetime.now(pytz.utc)
-    for mop_file in tqdm(mop_list):
-        if argparser.skip:    
-            if mop_file in already_done:
-                continue
-        mop_suc_num=0
+def read_mop_file(file_path: str) -> list[str]:
+    mop_list = [file_name for file_name in os.listdir(file_path)]
+    mop_data = []
+    for mop_file in mop_list:
         vnf = mop_file.split('_')[0]
         lang = mop_file.split('_')[3]
-        action = mop_file.split('_')[2] # confiugration action.
+        action = mop_file.split('_')[2]
         if action == 'port':
             additional_action='Based on it, configure to block the port except 22 and 80.\n'
         elif action in ['subnet', 'block'] :
@@ -139,163 +79,380 @@ if __name__ == '__main__':
             additional_action=''
         if vnf == 'Suricata':
             additional_action+="To install Suricata, you may need to add apt repository of Suricata, so you may need to install 'software-properties-common' first, and then add Suricata repository.\n"
-        if vnf not in vm_num:
-            vm_num[vnf] = 1
-        else:
-            vm_num[vnf] += 1
-        if vnf not in success_num_by_vnf:
-            success_num_by_vnf[vnf] = {'total_num' : 1, 'success_num': 0}
-        else:
-            success_num_by_vnf[vnf]['total_num'] += 1
         
+        example_code_list = [example + ':\n'+ good_example[example] for example in good_example if not vnf.lower() in example.lower()] 
+        example_code = '\n'.join(random.sample(example_code_list, min(len(example_code_list), 2))) #Select 2 examples randomly
+        example_code = good_example_prefix + example_code + goood_example_suffix
+
         # Parameters for VM creation
-        vm_name = 'vm-'+vnf+'-'+str(vm_num[vnf])
+        vm_name = 'vm-'+vnf+'-'+str(1)
         mop=''
         assert (mop_file.endswith('.docx'))
         doc = Document(mop_file_path + mop_file)
         for para in doc.paragraphs:
             mop += para.text + '\n'
-        if logging_:
-            with open(logging_file, 'a') as f:
-                f.write(f" --- Model: {model}, MOP: {mop_file}, VNF: {vnf}, VM: {vm_num[vnf]}\n")
-        spend_time = [0, 0, 0] # [llm response time, vm creation time, vm configuration time]
-        start_time = time.time()
+        single_mop = {'vnf': vnf, 'lang': lang, 'mop': prompts_1+prompts_2+ mop +additional_action+ example_code, 'vm_name': vm_name}
+        mop_data.append(single_mop)
+    return mop_data        
 
-        input_ids = tokenizer(prompts_1+prompts_2+ mop +additional_action+ example_code,max_length= max_len,  return_tensors = "pt").input_ids
-        query_tensors = [input_ids[i] for i in range(input_ids.size(0))]
-        response_ids = ppo_trainer.generate(query_tensors, max_new_tokens=20)
-        llm_response = tokenizer.decode(response_ids[0], skip_special_tokens=True)
-
-        already_success = False
-        spend_time[0] += time.time()-start_time
-        start_time = time.time()
-        if logging_:
-            with open(logging_file, 'a') as f:
-                f.write(f" --- Trial: {_+1}\n")
-                f.write(llm_response+'\n\n')
-        if form=='Python':
-            if system_name=='OpenStack':
-                test_result, server_or_message = test_creation_python_OpenStack(llm_response, vnf, model, vm_num[vnf])
-            elif system_name=='Kubernetes':
-                test_result, server_or_message = test_creation_python_K8S(llm_response, vnf, model, vm_num[vnf], _, v1, namespace)
-        else:
-            test_result, server_or_message = test_creation_ansible_K8S(llm_response, vnf, model, vm_num[vnf], v1, 600)
-        spend_time[1] = time.time()-start_time
-        if test_result == 0:
-            # TODO: OpenStack module still return 'True' if succeed.
-            if system_name=='OpenStack':
-                try:
-                    server = conn.compute.wait_for_server(server_or_message)
-                except:
-                    error_message="The 'create_vm' function does not return 'server' object. "
-                    if logging_:
-                        with open(logging_file, 'a') as f:
-                            f.write(error_message+'\n')
-                    continue
-            # VM creation success.
-            # Now, test the configuration
-            # print('creation success')
-            create_success_num[lang][model] += 1
-
-            start_time = time.time()
-
-            # Test configuration here. Need change for K8S and Ansible.
-            # Todo: Needs develop SFC checking module.
-
-            if system_name=='OpenStack':
-                second_test_result = test_openstack_configuration(server_or_message, vnf, model, vm_num[vnf], conn, None)
-            if system_name=='Kubernetes':
-                second_test_result, second_message = test_K8S_configuration(server_or_message, vnf, v1, namespace)
-            spend_time[2] = time.time()-start_time
-            if system_name=='OpenStack':
-                conn.delete_server(server_or_message.id)
-            if system_name=='Kubernetes':
-                delete_pod(v1, server_or_message, namespace)
-            if second_test_result == 0:
-                # TODO: OpenStack module still return 'True' if succeed.
-                process_time[model].append(spend_time)
-                success_num_by_vnf[vnf]['success_num'] += 1
-                config_success_num[lang][model] += 1
-                if logging_:
-                    with open(logging_file, 'a') as f:
-                        f.write('Test succeed\n')
-                print(f'VM creation and configuration both Succeed! model: {model}, vnf: {vnf}')
-                mop_suc_num+=1
-                reward = 1
-                break
-            else:
-                # VM Config test failed.
-                if logging_:
-                    with open(logging_file, 'a') as f:
-                        f.write('Config test failled. Results:\n')
-                        f.write(errorcode_dict[second_test_result]+'\n')
-                # creation success, but configuration failed. 
-                # reward is -0.5
-                reward = -0.5
-        else:
-            # VM Creation failed
-            if logging_:
-                with open(logging_file, 'a') as f:
-                    f.write('VM Creation test failled. Results:\n')
-                    f.write(errorcode_dict[test_result]+'\n')
-            reward = -1
-        if system_name=='OpenStack':
-            # Delete all VMs created after the target time
-            delete_vms_after(conn, target_datetime)
-        elif system_name=='Kubernetes':
-            delete_all_pods(v1, apps_v1)
-        # change next print operations to write in the logging_file
-        if logging_:
-            with open(logging_file, 'a') as f:
-                f.write('Middle report\n')
-                f.write(f"First VM Create success: {first_create_success_num[model]}\n")
-                f.write(f"Korean MOP - VM Create success: {create_success_num['ko'][model]}\n")
-                f.write(f"English MOP - VM Create success: {create_success_num['en'][model]}\n")
-                f.write(f"Total VM Create Success: {create_success_num['ko'][model]+create_success_num['en'][model]}\n")
-                f.write(f"First VNF Config success: {first_config_success_num[model]}\n")
-                f.write(f"Korean MOP - VNF Config success: {config_success_num['ko'][model]}\n")
-                f.write(f"English MOP - VNF Config success: {config_success_num['en'][model]}\n")
-                f.write(f"Total VNF Config Success: {config_success_num['ko'][model]+config_success_num['en'][model]}\n")
-                if len(process_time[model]) > 0:
-                    tot_num=len(process_time[model])
-                    pr_ti = process_time[model]
-                    f.write(f"Average LLM process time: {sum([i[0] for i in pr_ti])/tot_num} seconds\n")
-                    f.write(f"Average VM creation time: {sum([i[1] for i in pr_ti])/tot_num} seconds\n")
-                    f.write(f"Average VM configuration time: {sum([i[2] for i in pr_ti])/tot_num} seconds\n")
-                f.write(f"--------------------------------------------\n")
-        with open(logging_file_for_vnf, 'a')as f:
-            f.write(f" --- MOP: {mop_file}, success num: {mop_suc_num}\n")
-        
-        # PPO training
-        stats = ppo_trainer.step(
-            query_tensors,          # ← List[Tensor(seq_len,)]
-            [response_ids[0]],       # ← List[Tensor(new_seq_len,)]
-            [torch.tensor(reward)]                 # ← List[float]
+def get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p):
+    with torch.no_grad():
+        out_ids = model.generate(
+            **enc,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            temperature=temperature,
+            top_p=top_p,
+            pad_token_id=tokenizer.eos_token_id,
         )
-        print(f"Reward: {reward}, Stats: {stats}")
-    
-    end_time = time.time()
-    #conn.compute.delete_server(floating_server.id)
-    print('Total report')
-    print(f"Total MOPs: {all_mop_num}")
-    print(f"Model: {model},")
-    print(f"First VM Create success: {first_create_success_num[model]}")
-    print(f"Korean MOP - VM Create success: {create_success_num['ko'][model]}")
-    print(f"English MOP - VM Create success: {create_success_num['en'][model]}")
-    print(f"Total VM Create Success: {create_success_num['ko'][model]+create_success_num['en'][model]}")
-    print(f"First VNF Config success: {first_config_success_num[model]}")
-    print(f"Korean MOP - VNF Config success: {config_success_num['ko'][model]}")
-    print(f"English MOP - VNF Config success: {config_success_num['en'][model]}")
-    print(f"Total VNF Config Success: {config_success_num['ko'][model]+config_success_num['en'][model]}")
-    if len(process_time[model]) > 0:
-        tot_num=len(process_time[model])
-        pr_ti = process_time[model]
-        print(f"Average LLM process time: {sum([i[0] for i in pr_ti])/tot_num} seconds")
-        print(f"Average VM creation time: {sum([i[1] for i in pr_ti])/tot_num} seconds")
-        print(f"Average VM configuration time: {sum([i[2] for i in pr_ti])/tot_num} seconds")
-    print(f"--------------------------------------------------")
-    with open(logging_file_for_vnf, 'a')as f:
-        for vnf in success_num_by_vnf:
-            f.write(f"VNF: {vnf}, Total MOPs: {success_num_by_vnf[vnf]['total_num']}, Success: {success_num_by_vnf[vnf]['success_num']}\n")
-    
-    print(f'Total execution time:{(end_time-total_start_time)/60/60} hours')
+
+    decoded = tokenizer.decode(out_ids[0], skip_special_tokens=True)
+
+    # 보통 decoded에는 prompt+answer가 같이 들어있으므로,
+    # prompt를 제거해서 "answer만" 분리해두는게 실용적입니다.
+    # (prompt 텍스트가 토크나이즈/디코드에서 100% 동일하게 재현되지 않을 수 있어
+    # 안전하게는 token 단위로 자르는 방식도 가능하지만 여기서는 간단히 처리)
+    answer = decoded[len(prompt):].lstrip() if decoded.startswith(prompt) else decoded
+    return answer
+
+def get_reward_from_llm_response(answer: str, form: str, vnf: str, model_path_or_id: str, vm_num: dict, v1, namespace: str) -> float:
+    if form == 'Python':
+        test_result, server_or_message = test_creation_python_K8S(answer, vnf, model_path_or_id, vm_num[vnf], 1, v1, namespace)
+    else:
+        test_result, server_or_message = test_creation_ansible_K8S(answer, vnf, model_path_or_id, vm_num[vnf], v1, 600)
+    if test_result == 0: # Creation Success
+        second_test_result, second_message = test_K8S_configuration(server_or_message, vnf, v1, namespace)
+        delete_pod(v1, server_or_message, namespace)
+        if second_test_result == 0:
+            # Both Creation and Configuration Success
+            reward = 1.0
+        # Now, make reward based on status code.
+        elif second_test_result == 1:
+            reward = 0.0
+        elif second_test_result == 2:
+            reward = 0.8
+        elif second_test_result in [10, 11, 12, 13, 14]:
+            reward = 0.2
+        elif second_test_result in [20, 21, 22, 23]:
+            reward = 0.4
+        elif second_test_result in [30, 31, 32, 33, 41, 43, 51, 90, 91]:
+            reward = 0.6
+        else:
+            print( 'Unknown error code from configuration test:', second_test_result)
+            return None
+    else:
+        # VM Creation failed
+        reward = 0.0
+    return reward
+###############################################
+# Generate IO Pairs for DPO Training
+# Input data for DPO should be in the form of
+# {"prompt": ..., "chosen": ..., "rejected": ...}
+###############################################
+def generate_io_pairs(
+    model_path_or_id: str,
+    mop_data: List[Dict[str, str]],
+    v1, # Kubernetes client
+    form : str = 'Python',
+    max_new_tokens: int = 128,
+    temperature: float = 0.7,
+    top_p: float = 0.9,
+    device: Optional[str] = None,
+) -> List[Dict[str, str]]:
+    """
+    MOP data (list[dict[str, str]])를 받아 LLM 출력 생성 후,
+    [{"input": ..., "chosen": ..., "rejected": ...}, ...] 형태로 반환.
+    """
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    gc.collect()
+    torch.cuda.empty_cache()
+    tokenizer = AutoTokenizer.from_pretrained(model_path_or_id, cache_dir=hf_cache_path)
+    # decoder-only 모델의 padding 문제 방지
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model = AutoModelForCausalLM.from_pretrained(model_path_or_id, quantization_config=bnb_config,device_map="auto",cache_dir=hf_cache_path).to(device)
+    model.eval()
+
+    results: List[Dict[str, str]] = []
+    vm_num = {}
+    # 배치로 처리하고 싶으면 batch_size를 추가로 받아서 chunking하면 됨.
+    for single_mopd_data in mop_data:
+        prompt = single_mopd_data['mop']
+        vnf = single_mopd_data['vnf']
+        if vnf not in vm_num:
+            vm_num[vnf] = 1
+        else:
+            vm_num[vnf] += 1
+        lang = single_mopd_data['lang']
+        vm_name = single_mopd_data['vm_name']
+        enc = tokenizer(
+            prompt,
+            return_tensors="pt",
+            truncation=True,
+            padding=False,
+        ).to(device)
+        print ('#'*20)
+        print (f'## Generating IO pairs for VNF: {vnf}, Language: {lang}, VM: {vm_name}, MOP:')
+        print(prompt)
+        print('\n ## Now here is answer')
+        answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p)
+        print(answer)
+
+        # Test in NDT
+        success = get_reward_from_llm_response(answer, form, vnf, model_path_or_id, vm_num, v1, namespace)
+        if success == 1.0:
+            good_config_answer = answer
+            print('## Good configuration example generated successfully.')
+            while True:
+                answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p)
+                success = get_reward_from_llm_response(answer, form, vnf, model_path_or_id, vm_num, v1, namespace)
+                if success != 1.0:
+                    bad_config_answer = answer
+                    break
+                print('## Bad configuration example generated successfully, added to IO pairs.')
+                results.append({"input": prompt, "chosen": good_config_answer, "rejected": bad_config_answer})
+    print (f'Total {len(results)} IO pairs generated for DPO training.')
+    return results
+
+
+def evaluate_llm(
+    model_path_or_id: str,
+    mop_data: List[Dict[str, str]],
+    v1, # Kubernetes client
+    form : str = 'Python',
+    max_new_tokens: int = 128,
+    temperature: float = 0.7,
+    top_p: float = 0.9,
+    device: Optional[str] = None,
+    ):
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    gc.collect()
+    torch.cuda.empty_cache()
+    tokenizer = AutoTokenizer.from_pretrained(model_path_or_id, cache_dir=hf_cache_path)
+    # decoder-only 모델의 padding 문제 방지
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model = AutoModelForCausalLM.from_pretrained(model_path_or_id, quantization_config=bnb_config,device_map="auto",cache_dir=hf_cache_path).to(device)
+    model.eval()
+
+    results: List[Dict[str, str]] = []
+    vm_num = {}
+    # 배치로 처리하고 싶으면 batch_size를 추가로 받아서 chunking하면 됨.
+    success_num=0
+    for single_mopd_data in mop_data:
+        prompt = single_mopd_data['mop']
+        vnf = single_mopd_data['vnf']
+        if vnf not in vm_num:
+            vm_num[vnf] = 1
+        else:
+            vm_num[vnf] += 1
+        lang = single_mopd_data['lang']
+        vm_name = single_mopd_data['vm_name']
+        enc = tokenizer(
+            prompt,
+            return_tensors="pt",
+            truncation=True,
+            padding=False,
+        ).to(device)
+        answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p)
+        success = get_reward_from_llm_response(answer, form, vnf, model_path_or_id, vm_num, v1, namespace)
+        if success == 1.0:
+            success_num+=1
+    print (f'## Evaluation completed. Success rate: {success_num}/{len(mop_data)}')
+    return success_num/len(mop_data)
+
+###############################################
+# 1. PPO TRAINING LOOP
+###############################################
+def run_ppo_training(model_name="gpt2", steps=1000):
+    print("\n=== RUNNING PPO TRAINING ===")
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer.pad_token = tokenizer.eos_token
+
+    policy = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
+    ref_policy = create_reference_model(policy)
+
+    # PPO Config with KL control + reward normalization
+    config = PPOConfig(
+        model_name=model_name,
+        learning_rate=1e-6,
+        batch_size=8,
+        mini_batch_size=4,
+        steps=steps,
+        adap_kl_ctrl=True,
+        init_kl_coef=0.02,
+        target=3.0,
+        horizon=10_000,
+        whiten_rewards=True,
+        use_score_norm=True,
+        use_score_scaling=True,
+    )
+
+    trainer = PPOTrainer(
+        config=config,
+        model=policy,
+        ref_model=ref_policy,
+        tokenizer=tokenizer
+    )
+
+    prompts = [
+        "Task input example 1",
+        "Task input example 2",
+        "Task input example 3",
+    ]
+
+    generation_kwargs = {
+        "max_new_tokens": 64,
+        "do_sample": True,
+        "top_p": 0.95,
+        "temperature": 0.7,
+        "pad_token_id": tokenizer.eos_token_id,
+    }
+
+    for step in range(steps):
+        batch_prompts = np.random.choice(prompts, size=config.batch_size).tolist()
+        inputs = tokenizer(batch_prompts, return_tensors="pt", padding=True).to(policy.device)
+
+        responses_ids = trainer.generate(inputs["input_ids"], **generation_kwargs)
+        responses = tokenizer.batch_decode(responses_ids, skip_special_tokens=True)
+
+        # Raw reward → shaping → normalization
+        shaped_rewards = []
+        for p, a in zip(batch_prompts, responses):
+            raw = your_python_reward(p, a)
+            shaped = shape_reward(raw)
+            shaped_rewards.append(shaped)
+
+        reward_tensor = torch.tensor(shaped_rewards, dtype=torch.float32)
+        reward_norm = normalize_rewards(reward_tensor)
+
+        trainer.step(
+            queries=list(inputs["input_ids"]),
+            responses=list(responses_ids),
+            rewards=[r for r in reward_norm]
+        )
+
+        if step % 50 == 0:
+            print(f"[PPO step={step}] mean shaped reward = {reward_tensor.mean().item():.4f}")
+
+
+###############################################
+# 2. ONLINE DPO TRAINING LOOP
+###############################################
+def train_dpo(
+    model_path_or_id: str,
+    dpo_rows: List[Dict[str, str]],
+    output_dir: str = "./tmp/dpo-out",
+    *,
+    per_device_train_batch_size: int = 2,
+    learning_rate: float = 2e-6,
+    num_train_epochs: int = 1,
+    beta: float = 0.1,
+    device: Optional[str] = None,
+):
+    """
+    dpo_rows(list of dict)로 Dataset 만든 뒤 TRL의 DPOTrainer로 학습합니다.
+    """
+    gc.collect()
+    torch.cuda.empty_cache()
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # 1) Dataset 구성
+    train_dataset = Dataset.from_list(dpo_rows)
+
+    # 2) 모델/토크나이저 로드
+    tokenizer = AutoTokenizer.from_pretrained(model_path_or_id, cache_dir=hf_cache_path)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model = AutoModelForCausalLM.from_pretrained(model_path_or_id, quantization_config=bnb_config,device_map="auto",cache_dir=hf_cache_path).to(device)
+
+    # 3) DPOConfig 설정
+    # - beta: reference 대비 정책 변화(KL 성격)를 조절하는 중요한 하이퍼파라미터
+    # - remove_unused_columns=False: prompt/chosen/rejected 컬럼을 trainer가 그대로 사용하도록 유지
+    dpo_config = DPOConfig(
+        output_dir=output_dir,
+        per_device_train_batch_size=per_device_train_batch_size,
+        learning_rate=learning_rate,
+        num_train_epochs=num_train_epochs,
+        beta=beta,
+        remove_unused_columns=False,
+        logging_steps=10,
+        save_steps=200,
+    )
+
+    # 4) Trainer 생성 및 학습
+    trainer = DPOTrainer(
+        model=model,
+        args=dpo_config,
+        processing_class=tokenizer,   # tokenizer를 넘겨주면 내부에서 토큰화/패딩 처리
+        train_dataset=train_dataset,
+    )
+
+    trainer.train()
+    trainer.save_model(output_dir)
+    return output_dir
+
+if __name__ == '__main__':
+    argparser = argparse.ArgumentParser()
+    argparser.add_argument('--Ansible', action='store_true')
+    argparser.add_argument('--Python', action='store_true')
+    argparser.add_argument('--RAG', action='store_true')
+    argparser.add_argument('--skip', action='store_true', help= "Skip MOPs in 'already_don.py'. Using when terminating unexpected")
+    argparser.add_argument('--test', action='store_true', help='Test only 3 MOPs for testing')
+    argparser.add_argument('--no-log', action='store_true', help= 'Do not log the result')
+    argparser.add_argument('--judge', action='store_true', help= 'judge LLM in RAG')
+    argparser.add_argument('--method', default = 'dpo', choices = ['dpo', 'ppo'])
+
+    argparser=argparser.parse_args()
+    mop_file_path = '../mop/Intergrated/'
+    system_name='Kubernetes'
+    config.load_kube_config()
+    v1 = client.CoreV1Api()
+    apps_v1 = client.AppsV1Api()
+    form='Python' if argparser.Python else 'Ansible'
+
+    mop_data = read_mop_file(mop_file_path)
+    input_io_pairs = generate_io_pairs(
+        model_path_or_id='google/gemma-3-27b-it',
+        mop_data=mop_data,
+        v1=v1,
+        form=form,
+        max_new_tokens=512,
+        temperature=0.7,
+        top_p=0.9,
+    )
+    evaluate_llm(
+        model_path_or_id='google/gemma-3-27b-it',
+        mop_data=mop_data,
+        v1=v1,
+        form=form,
+        max_new_tokens=512,
+        temperature=0.7,
+        top_p=0.9,
+    )
+    train_dpo(
+        model_path_or_id='google/gemma-3-27b-it',
+        dpo_rows=input_io_pairs,
+        output_dir='./tmp/dpo_gemma3.3_k8s',
+        per_device_train_batch_size=1,
+        learning_rate=2e-6,
+        num_train_epochs=3,
+        beta=0.1,
+    )
+    evaluate_llm(
+        model_path_or_id='./tmp/dpo_gemma3.3_k8s',
+        mop_data=mop_data,
+        v1=v1,
+        form=form,
+        max_new_tokens=512,
+        temperature=0.7,
+        top_p=0.9,
+    )
+ 

@@ -18,6 +18,11 @@ A preliminary version covering OpenStack-based experiments has been published.
 
 ## 📌 System Architecture
 
+### Requriements:
+```bash
+pip install paramiko python-openstackclient python-docx ansible_runner astor torch pytz tqdm kubernetes trl datasets peft bitsandbytes
+ ```
+
 The current prototype consists of the following major modules:
 
 - **LLM Module** – Generates workflow code based on user-provided MOPs  
