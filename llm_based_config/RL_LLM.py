@@ -33,6 +33,7 @@ from trl import (
     DPOTrainer,
     DPOConfig
 )
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from datasets import Dataset
 import numpy as np
 
@@ -46,7 +47,26 @@ from kubernetes_config import *
 
 logging.getLogger("paramiko").setLevel(logging.CRITICAL) 
 hf_cache_path = '/storage3/hf_cache/'
-bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+#bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_compute_dtype=torch.bfloat16,
+)
+
+def build_enc(tokenizer, prompt_text: str, max_input_tokens: int = 8192):
+    messages = [{"role": "user", "content": prompt_text}]
+    # add_generation_prompt=True 가 핵심: "이제 모델이 답할 차례"를 붙여줌
+    enc = tokenizer.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        truncation=True,
+        return_tensors="pt",
+        max_length=max_input_tokens,
+    )
+    return {"input_ids": enc}
 
 def shape_reward(r):
     """Reward shaping: [0,1] → [-1,1]"""
@@ -60,6 +80,11 @@ def normalize_rewards(reward_tensor):
 
 def read_mop_file(file_path: str) -> list[str]:
     mop_list = [file_name for file_name in os.listdir(file_path)]
+
+    # Just be simple
+    mop_len = len(mop_list)
+    mop_list = mop_list[:int(mop_len/5)]
+
     mop_data = []
     for mop_file in mop_list:
         vnf = mop_file.split('_')[0]
@@ -95,34 +120,57 @@ def read_mop_file(file_path: str) -> list[str]:
         mop_data.append(single_mop)
     return mop_data        
 
-def get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p):
+def get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p, prompt, do_sample=False) -> str:
+    assert tokenizer.name_or_path == model.config.name_or_path
+    attention_mask = torch.ones_like(enc["input_ids"])
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     with torch.no_grad():
-        out_ids = model.generate(
-            **enc,
-            max_new_tokens=max_new_tokens,
-            do_sample=True,
-            temperature=temperature,
-            top_p=top_p,
-            pad_token_id=tokenizer.eos_token_id,
-        )
+        if do_sample:        
+            out_ids = model.generate(
+                input_ids=enc["input_ids"].to(device),
+                attention_mask=attention_mask.to(device),
+                max_new_tokens=max_new_tokens,
+                do_sample=do_sample,
+                temperature=temperature,
+                top_p=top_p,
+                pad_token_id=tokenizer.eos_token_id,
+                top_k = 50,
+                repetition_penalty=1.1,
+            )
+        else:        
+            out_ids = model.generate(
+                input_ids=enc["input_ids"].to(device),
+                attention_mask=attention_mask.to(device),
+                max_new_tokens=max_new_tokens,
+                do_sample=do_sample,
+                pad_token_id=tokenizer.eos_token_id,
+                repetition_penalty=1.1,
+                eos_token_id=tokenizer.eos_token_id
+            )
 
     decoded = tokenizer.decode(out_ids[0], skip_special_tokens=True)
 
     # 보통 decoded에는 prompt+answer가 같이 들어있으므로,
     # prompt를 제거해서 "answer만" 분리해두는게 실용적입니다.
-    # (prompt 텍스트가 토크나이즈/디코드에서 100% 동일하게 재현되지 않을 수 있어
-    # 안전하게는 token 단위로 자르는 방식도 가능하지만 여기서는 간단히 처리)
-    answer = decoded[len(prompt):].lstrip() if decoded.startswith(prompt) else decoded
+
+    input_len = enc["input_ids"].shape[1]
+    output_len = out_ids.shape[1]
+    print("\n##>> input_len:", input_len, "output_len:", output_len, "new_tokens:", output_len - input_len)
+    gen_ids = out_ids[0][input_len:]
+    # 디코딩
+    answer = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+
     return answer
 
-def get_reward_from_llm_response(answer: str, form: str, vnf: str, model_path_or_id: str, vm_num: dict, v1, namespace: str) -> float:
+def get_reward_from_llm_response(answer: str, form: str, vnf: str, model_name: str, vm_num: dict, v1, namespace: str) -> float:
     if form == 'Python':
-        test_result, server_or_message = test_creation_python_K8S(answer, vnf, model_path_or_id, vm_num[vnf], 1, v1, namespace)
+        test_result, server_or_message = test_creation_python_K8S(answer, vnf, model_name, vm_num[vnf], 1, v1, namespace)
     else:
-        test_result, server_or_message = test_creation_ansible_K8S(answer, vnf, model_path_or_id, vm_num[vnf], v1, 600)
+        test_result, server_or_message = test_creation_ansible_K8S(answer, vnf, model_name, vm_num[vnf], v1, 600)
     if test_result == 0: # Creation Success
         second_test_result, second_message = test_K8S_configuration(server_or_message, vnf, v1, namespace)
         delete_pod(v1, server_or_message, namespace)
+        print(f'## Creation success, status code: {second_test_result}')
         if second_test_result == 0:
             # Both Creation and Configuration Success
             reward = 1.0
@@ -138,9 +186,10 @@ def get_reward_from_llm_response(answer: str, form: str, vnf: str, model_path_or
         elif second_test_result in [30, 31, 32, 33, 41, 43, 51, 90, 91]:
             reward = 0.6
         else:
-            print( 'Unknown error code from configuration test:', second_test_result)
+            print( '## Unknown error code from configuration test:', second_test_result)
             return None
     else:
+        print('## Creation failed')
         # VM Creation failed
         reward = 0.0
     return reward
@@ -155,8 +204,8 @@ def generate_io_pairs(
     v1, # Kubernetes client
     form : str = 'Python',
     max_new_tokens: int = 128,
-    temperature: float = 0.7,
-    top_p: float = 0.9,
+    temperature: float = 0.3,
+    top_p: float = 0.8,
     device: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """
@@ -172,47 +221,45 @@ def generate_io_pairs(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(model_path_or_id, quantization_config=bnb_config,device_map="auto",cache_dir=hf_cache_path).to(device)
+    model = AutoModelForCausalLM.from_pretrained(model_path_or_id, quantization_config=bnb_config,device_map="auto",cache_dir=hf_cache_path)
     model.eval()
 
     results: List[Dict[str, str]] = []
     vm_num = {}
     # 배치로 처리하고 싶으면 batch_size를 추가로 받아서 chunking하면 됨.
-    for single_mopd_data in mop_data:
-        prompt = single_mopd_data['mop']
-        vnf = single_mopd_data['vnf']
+    model_name = model_path_or_id.split('/')[-1]
+    for single_mop_data in mop_data:
+        prompt = single_mop_data['mop']
+        vnf = single_mop_data['vnf']
         if vnf not in vm_num:
             vm_num[vnf] = 1
         else:
             vm_num[vnf] += 1
-        lang = single_mopd_data['lang']
-        vm_name = single_mopd_data['vm_name']
-        enc = tokenizer(
-            prompt,
-            return_tensors="pt",
-            truncation=True,
-            padding=False,
-        ).to(device)
-        print ('#'*20)
+        lang = single_mop_data['lang']
+        vm_name = single_mop_data['vm_name']
+        enc = build_enc(tokenizer, prompt, max_input_tokens=8192)
+        first_device = next(model.parameters()).device
+        enc = {k: v.to(first_device) for k, v in enc.items()}
+        print ('\n'+'#'*50)
         print (f'## Generating IO pairs for VNF: {vnf}, Language: {lang}, VM: {vm_name}, MOP:')
-        print(prompt)
-        print('\n ## Now here is answer')
-        answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p)
-        print(answer)
+        #print(prompt)
+        #print('\n ## Now here is answer')
+        answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p, prompt, do_sample=True)
+        #print(answer)
 
         # Test in NDT
-        success = get_reward_from_llm_response(answer, form, vnf, model_path_or_id, vm_num, v1, namespace)
+        success = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, v1, namespace)
         if success == 1.0:
             good_config_answer = answer
             print('## Good configuration example generated successfully.')
-            while True:
-                answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p)
-                success = get_reward_from_llm_response(answer, form, vnf, model_path_or_id, vm_num, v1, namespace)
+            for _ in range(5):  # 최대 5번까지 시도
+                answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, 0.5, top_p, prompt, do_sample=True)
+                success = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, v1, namespace)
                 if success != 1.0:
                     bad_config_answer = answer
                     break
-                print('## Bad configuration example generated successfully, added to IO pairs.')
-                results.append({"input": prompt, "chosen": good_config_answer, "rejected": bad_config_answer})
+            print('## Bad configuration example generated successfully, added to IO pairs.')
+            results.append({"input": prompt, "chosen": good_config_answer, "rejected": bad_config_answer})
     print (f'Total {len(results)} IO pairs generated for DPO training.')
     return results
 
@@ -236,30 +283,31 @@ def evaluate_llm(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(model_path_or_id, quantization_config=bnb_config,device_map="auto",cache_dir=hf_cache_path).to(device)
+    model = AutoModelForCausalLM.from_pretrained(model_path_or_id, quantization_config=bnb_config,device_map="auto",cache_dir=hf_cache_path)
     model.eval()
 
     results: List[Dict[str, str]] = []
     vm_num = {}
     # 배치로 처리하고 싶으면 batch_size를 추가로 받아서 chunking하면 됨.
     success_num=0
-    for single_mopd_data in mop_data:
-        prompt = single_mopd_data['mop']
-        vnf = single_mopd_data['vnf']
+    model_name = model_path_or_id.split('/')[-1]
+    for single_mop_data in mop_data:
+        prompt = single_mop_data['mop']
+        vnf = single_mop_data['vnf']
         if vnf not in vm_num:
             vm_num[vnf] = 1
         else:
             vm_num[vnf] += 1
-        lang = single_mopd_data['lang']
-        vm_name = single_mopd_data['vm_name']
+        lang = single_mop_data['lang']
+        vm_name = single_mop_data['vm_name']
         enc = tokenizer(
             prompt,
             return_tensors="pt",
             truncation=True,
             padding=False,
         ).to(device)
-        answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p)
-        success = get_reward_from_llm_response(answer, form, vnf, model_path_or_id, vm_num, v1, namespace)
+        answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p, prompt)
+        success = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, v1, namespace)
         if success == 1.0:
             success_num+=1
     print (f'## Evaluation completed. Success rate: {success_num}/{len(mop_data)}')
@@ -370,8 +418,18 @@ def train_dpo(
     tokenizer = AutoTokenizer.from_pretrained(model_path_or_id, cache_dir=hf_cache_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(model_path_or_id, quantization_config=bnb_config,device_map="auto",cache_dir=hf_cache_path).to(device)
+    lora_config = LoraConfig(
+        r=16,
+        lora_alpha=32,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
+    model = AutoModelForCausalLM.from_pretrained(model_path_or_id, quantization_config=bnb_config,device_map="auto",cache_dir=hf_cache_path)
+    model = prepare_model_for_kbit_training(model)
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
 
     # 3) DPOConfig 설정
     # - beta: reference 대비 정책 변화(KL 성격)를 조절하는 중요한 하이퍼파라미터
@@ -409,6 +467,7 @@ if __name__ == '__main__':
     argparser.add_argument('--no-log', action='store_true', help= 'Do not log the result')
     argparser.add_argument('--judge', action='store_true', help= 'judge LLM in RAG')
     argparser.add_argument('--method', default = 'dpo', choices = ['dpo', 'ppo'])
+    argparser.add_argument('--load-data', type=str, default=None, help='Path to the DPO dataset to load')
 
     argparser=argparser.parse_args()
     mop_file_path = '../mop/Intergrated/'
@@ -419,40 +478,42 @@ if __name__ == '__main__':
     form='Python' if argparser.Python else 'Ansible'
 
     mop_data = read_mop_file(mop_file_path)
-    input_io_pairs = generate_io_pairs(
-        model_path_or_id='google/gemma-3-27b-it',
+    if argparser.load_data is not None:
+        import pickle
+        with open(argparser.load_data, 'rb') as f:
+            input_io_pairs = pickle.load(f)
+    else:
+        input_io_pairs = generate_io_pairs(
+            model_path_or_id='Qwen/Qwen2.5-7B-Instruct',
+            mop_data=mop_data,
+            v1=v1,
+            form=form,
+            max_new_tokens=1000,
+        )
+        with open('tmp/dpo_dataset.pkl' , 'wb') as f:
+            import pickle
+            pickle.dump(input_io_pairs, f)
+    '''evaluate_llm(
+        model_path_or_id='Qwen/Qwen2.5-7B-Instruct',
         mop_data=mop_data,
         v1=v1,
         form=form,
-        max_new_tokens=512,
-        temperature=0.7,
-        top_p=0.9,
-    )
-    evaluate_llm(
-        model_path_or_id='google/gemma-3-27b-it',
-        mop_data=mop_data,
-        v1=v1,
-        form=form,
-        max_new_tokens=512,
-        temperature=0.7,
-        top_p=0.9,
-    )
+        max_new_tokens=1000,
+    )'''
     train_dpo(
-        model_path_or_id='google/gemma-3-27b-it',
+        model_path_or_id='Qwen/Qwen2.5-7B-Instruct',
         dpo_rows=input_io_pairs,
-        output_dir='./tmp/dpo_gemma3.3_k8s',
+        output_dir='./tmp/dpo_qwen2.5_7b_k8s',
         per_device_train_batch_size=1,
         learning_rate=2e-6,
         num_train_epochs=3,
         beta=0.1,
     )
     evaluate_llm(
-        model_path_or_id='./tmp/dpo_gemma3.3_k8s',
+        model_path_or_id='./tmp/dpo_qwen2.5_7b_k8s',
         mop_data=mop_data,
         v1=v1,
         form=form,
-        max_new_tokens=512,
-        temperature=0.7,
-        top_p=0.9,
+        max_new_tokens=1000,
     )
  

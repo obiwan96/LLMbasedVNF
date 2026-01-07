@@ -73,7 +73,7 @@ def prompt(lang, system):
 
         # Kubernetes Python code part is just copy version of OpenStack. need change.
         elif system == 'Kubernetes':
-            good_example_prefix = "Also, here are 'example' codes to create and configure a VNF in Kubernetes using Python with Kubernetes library for reference. \n" 
+            good_example_prefix = "\nMOP ends. Also, here are 'example' codes to create and configure a VNF in Kubernetes using Python with Kubernetes library for reference. \n" 
             prompts_1 = f'''You are an Kubernetes cloud expert. 
             Please write Python code that creates a Kubernetes Pod and installs a VNF inside it, taking the following points into consideration.
             You don't have to explain your code. Keep your answer code-focused and as simple as possible.
@@ -90,9 +90,9 @@ def prompt(lang, system):
             9.  Instead of using the cluster's default DNS settings, manually set the DNS to '{DNS_IP}'.
             10. Put 'sleep infinity' command, so that container dosen't killed.
             12. Since systemctl cannot be used in containers, even if the MOP instructs to install the VNF using systemctl, an alternative method like running with daemon option, must be found.
-            12. Don't use stdin to get any kind of password.
-            13. Don't make 'host_name' option as True in Pod creation step.
-            14. Configure the VNF in one container.
+            13. Don't use stdin to get any kind of password.
+            14. Don't make 'host_name' option as True in Pod creation step.
+            15. Configure the VNF in one container.
 
             Please ensure that you follow these instructions exactly and do not deviate from the specified function name, parameter list, or return value.'''
         
@@ -103,7 +103,7 @@ def prompt(lang, system):
             return 'need to implement'
         # Let's do Kubernetes Ansible first!
         elif system== 'Kubernetes':
-            good_example_prefix = "Here are example YAML configuration snippets for creating and configuring a CNF in Kubernetes using Ansible. \n"
+            good_example_prefix = "\nMOP ends. Here are example YAML configuration snippets for creating and configuring a CNF in Kubernetes using Ansible. \n"
             good_example_suffix = "\nNow, write the YAML code that automates the process described in the MOP, following the above requirements."
             prompts_1 = '''You are a Kubernetes cloud expert. 
             I will provide you with a Method of Procedure (MOP), which outlines the steps for deploying a Pod in Kubernetes and installing and configuring the CNF specified in the MOP on that Pod.
