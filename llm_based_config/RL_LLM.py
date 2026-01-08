@@ -21,6 +21,7 @@ from typing import List, Dict, Optional
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import torch
 from trl import (
+    GRPOTrainer, GRPOConfig,
     PPOConfig,
     PPOTrainer,
     AutoModelForCausalLMWithValueHead,
@@ -157,11 +158,11 @@ def get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, to
 
     return answer
 
-def get_reward_from_llm_response(answer: str, form: str, vnf: str, model_name: str, vm_num: dict, v1, namespace: str) -> float:
+def get_reward_from_llm_response(answer: str, form: str, vnf: str, model_name: str, vm_num: int, v1, namespace: str) -> float:
     if form == 'Python':
-        test_result, server_or_message = test_creation_python_K8S(answer, vnf, model_name, vm_num[vnf], 1, v1, namespace)
+        test_result, server_or_message = test_creation_python_K8S(answer, vnf, model_name, vm_num, 1, v1, namespace)
     else:
-        test_result, server_or_message = test_creation_ansible_K8S(answer, vnf, model_name, vm_num[vnf], v1, 600)
+        test_result, server_or_message = test_creation_ansible_K8S(answer, vnf, model_name, vm_num, v1, 600)
     if test_result == 0: # Creation Success
         second_test_result, second_message = test_K8S_configuration(server_or_message, vnf, v1, namespace)
         delete_pod(v1, server_or_message, namespace)
@@ -311,6 +312,10 @@ def evaluate_llm(
 ###############################################
 # 1. PPO TRAINING LOOP
 ###############################################
+
+
+## PPO onling training doesn't work in latest TRL version (0.11~)
+# Stop now.
 def train_ppo(
     model_path_or_id: str,
     mop_data: List[Dict[str, str]],
@@ -414,6 +419,138 @@ def train_ppo(
         if step % 10 == 0:
             print(f"[PPO step={step}] mean shaped reward = {reward_tensor.mean().item():.4f}")
 
+def train_grpo(
+    model_path_or_id: str,
+    mop_data: List[Dict[str, str]],
+    v1,  # Kubernetes client
+    form: str = "Python",
+    output_dir: str = "./tmp/grpo-out",
+    learning_rate: float = 1e-6,
+    beta_kl: float = 0.1,              # PPO의 kl_coef/target_kl 대응 (GRPOConfig.beta)
+    max_new_tokens: int = 500,         # GRPOConfig.max_completion_length 대응
+    temperature: float = 0.2,
+    top_p: float = 0.8,
+    device: Optional[str] = None,      # (참고) GRPOTrainer가 보통 accelerate로 device를 잡습니다.
+    steps: int = 20,
+    batch_size: int = 3,               # PPOConfig.batch_size 대응 (per_device_train_batch_size)
+    grad_accum: int = 4,               # PPO의 gradient_accumulation_steps 대응
+    num_generations: int = 2,          # ⭐ GRPO 핵심: 프롬프트당 completion 개수(G). 최소 2 권장
+    scale_rewards: str = "group",      # "group"(기본) / "batch" / False 등
+    log_completions: bool = True,
+    num_completions_to_print: int = 6,
+    ):
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    # ✅ 1) 모델/토크나이저 로드 (GRPO는 ValueHead 불필요)
+    lora_config = LoraConfig(
+        r=16,
+        lora_alpha=32,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path_or_id,
+        cache_dir=hf_cache_path,
+        quantization_config=bnb_config,
+        device_map="auto",
+        torch_dtype=torch.bfloat16, # bnb_config에 맞춰서
+    )
+    model = get_peft_model(model, lora_config, autocast_adapter_dtype=False)
+    model.print_trainable_parameters()
+    for name, p in model.named_parameters():
+        if "lora_" in name and p.dtype == torch.float32:
+            p.data = p.data.to(torch.bfloat16)
+    if hasattr(model, "lm_head") and model.lm_head is not None:
+        model.lm_head = model.lm_head.to(torch.bfloat16)
+    
+    tokenizer = AutoTokenizer.from_pretrained(model_path_or_id, cache_dir=hf_cache_path)
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"  # generation 안정성에 도움이 되는 경우가 많음
+
+    # ✅ 2) GRPO는 train_dataset에 "prompt" 컬럼이 필요
+    #    그리고 reward 함수에 넘길 vnf 컬럼도 같이 둡니다. :contentReference[oaicite:1]{index=1}
+    #    (문서에는 "추가 컬럼은 무시"라고도 나오지만, reward 함수에는 kwargs로 전달됩니다.)
+    train_rows = [{"prompt": x["mop"], "vnf": x["vnf"]} for x in mop_data]
+    train_dataset = Dataset.from_list(train_rows)
+
+    model_name = model_path_or_id.split("/")[-1] + "_GRPO"
+
+    # ✅ 3) custom reward 함수: GRPOTrainer가 매 스텝 내부에서 호출
+    #    시그니처: reward_func(prompts, completions, completions_ids, +dataset columns as kwargs, trainer_state) :contentReference[oaicite:2]{index=2}
+    def reward_func(prompts, completions, vnf, trainer_state=None, **kwargs):
+        """
+        - prompts: List[str] (혹은 chat format이면 List[dict]…)
+        - completions: List[str]  (GRPOTrainer가 생성한 텍스트)
+        - vnf: List[str] (dataset column)
+        return: List[float] (completion 단위 reward)
+        """
+        raw_rewards = []
+        shaped = []
+
+        for v, comp in zip(vnf, completions):
+            raw = get_reward_from_llm_response(comp, form, v, model_name, 1, v1, namespace)
+            raw_rewards.append(float(raw))
+            shaped.append(float(shape_reward(raw)))
+
+        shaped_t = torch.tensor(shaped, dtype=torch.float32)
+        norm_t = shape_reward(shaped_t) 
+        return [float(x) for x in norm_t.detach().cpu().tolist()]
+
+    # ✅ 4) GRPOConfig: PPOConfig와 매핑되는 값들을 지정
+    #    - beta: KL 패널티 계수(원하면 0도 가능) :contentReference[oaicite:3]{index=3}
+    #    - num_generations: 프롬프트당 completion 수(G) :contentReference[oaicite:4]{index=4}
+    #    - max_completion_length: max_new_tokens 대응 :contentReference[oaicite:5]{index=5}
+    args = GRPOConfig(
+        output_dir=output_dir,
+        learning_rate=learning_rate,
+        per_device_train_batch_size=batch_size,
+        gradient_accumulation_steps=grad_accum,
+
+        max_steps=steps,                 # PPO의 for-step 루프를 그대로 “스텝 수”로 대응
+        logging_steps=1,
+        report_to=["tensorboard"],
+        logging_dir=os.path.join(output_dir, "logs"),
+
+        # generation 관련
+        num_generations=num_generations,
+        max_completion_length=max_new_tokens,
+        temperature=temperature,
+        top_p=top_p,
+
+        # KL 제어
+        beta=beta_kl,
+
+        # reward scaling (group/batch/False)
+        scale_rewards=scale_rewards,
+
+        # Because type is bf16 in bnb_config
+        bf16=True,
+        fp16=False,
+
+        # completions 로그 (프린트/로깅)
+        log_completions=log_completions,
+        num_completions_to_print=num_completions_to_print,
+    )
+
+    # ✅ 5) Trainer 구성 & 학습
+    
+    trainer = GRPOTrainer(
+        model=model,
+        args=args,
+        reward_funcs=reward_func,
+        train_dataset=train_dataset,
+        processing_class=tokenizer,
+    )
+    with torch.autocast("cuda"):
+        trainer.train()
+
+    # 모델 저장 (LoRA adapter 포함)
+    trainer.save_model(output_dir)
+    print(f"\n✅ GRPO training finished. Saved to: {output_dir}")
 
 ###############################################
 # 2. ONLINE DPO TRAINING LOOP
@@ -534,15 +671,26 @@ if __name__ == '__main__':
         num_train_epochs=3,
         beta=0.1,
     )
-    train_ppo(
+    '''train_ppo(
         model_path_or_id='./tmp/dpo_qwen2.5_7b_k8s',
         mop_data=mop_data,
         v1=v1,
         form=form,
         output_dir='./tmp/ppo_dpo_qwen2.5_7b_k8s',
+    )'''
+    train_grpo(
+        model_path_or_id='./tmp/dpo_qwen2.5_7b_k8s',
+        mop_data=mop_data,
+        v1=v1,
+        form=form,
+        output_dir='./tmp/grpo_dpo_qwen2.5_7b_k8s',
+        steps=20,
+        batch_size=3,
+        grad_accum=2,
+        num_generations=3,
     )
     evaluate_llm(
-        model_path_or_id='./tmp/ppo_dpo_qwen2.5_7b_k8s',
+        model_path_or_id='./tmp/grpo_dpo_qwen2.5_7b_k8s',
         mop_data=mop_data,
         v1=v1,
         form=form,
