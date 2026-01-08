@@ -8,10 +8,6 @@ os.environ["TRANSFORMERS_CACHE"]        = "/storage1/hf_cache/transformers"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"          # 선택
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-import pytz
-import time
-from tqdm import tqdm
-from datetime import datetime
 import logging
 import time
 import random
@@ -21,7 +17,6 @@ import gc
 from kubernetes_config import *
 from kubernetes import client, config
 from typing import List, Dict, Optional
-from collections import defaultdict
 
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import torch
@@ -35,7 +30,7 @@ from trl import (
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from datasets import Dataset
-import numpy as np
+from torch.utils.tensorboard import SummaryWriter
 
 #Local modules
 from prompt import prompt, namespace
@@ -78,12 +73,13 @@ def normalize_rewards(reward_tensor):
     std = reward_tensor.std(unbiased=False)
     return (reward_tensor - mean) / (std + 1e-6)
 
-def read_mop_file(file_path: str) -> list[str]:
+def read_mop_file(file_path: str, test:bool = False) -> list[str]:
     mop_list = [file_name for file_name in os.listdir(file_path)]
 
     # Just be simple
-    mop_len = len(mop_list)
-    mop_list = mop_list[:int(mop_len/5)]
+    if test:
+        mop_len = len(mop_list)
+        mop_list = mop_list[:int(mop_len/8)]  # Test with 1/8 MOPs
 
     mop_data = []
     for mop_file in mop_list:
@@ -121,7 +117,7 @@ def read_mop_file(file_path: str) -> list[str]:
     return mop_data        
 
 def get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p, prompt, do_sample=False) -> str:
-    assert tokenizer.name_or_path == model.config.name_or_path
+    #assert tokenizer.name_or_path == model.config.name_or_path
     attention_mask = torch.ones_like(enc["input_ids"])
     device = "cuda" if torch.cuda.is_available() else "cpu"
     with torch.no_grad():
@@ -136,6 +132,7 @@ def get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, to
                 pad_token_id=tokenizer.eos_token_id,
                 top_k = 50,
                 repetition_penalty=1.1,
+                eos_token_id=tokenizer.eos_token_id
             )
         else:        
             out_ids = model.generate(
@@ -147,8 +144,6 @@ def get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, to
                 repetition_penalty=1.1,
                 eos_token_id=tokenizer.eos_token_id
             )
-
-    decoded = tokenizer.decode(out_ids[0], skip_special_tokens=True)
 
     # 보통 decoded에는 prompt+answer가 같이 들어있으므로,
     # prompt를 제거해서 "answer만" 분리해두는게 실용적입니다.
@@ -203,7 +198,7 @@ def generate_io_pairs(
     mop_data: List[Dict[str, str]],
     v1, # Kubernetes client
     form : str = 'Python',
-    max_new_tokens: int = 128,
+    max_new_tokens: int = 500,
     temperature: float = 0.3,
     top_p: float = 0.8,
     device: Optional[str] = None,
@@ -253,7 +248,7 @@ def generate_io_pairs(
             good_config_answer = answer
             print('## Good configuration example generated successfully.')
             for _ in range(5):  # 최대 5번까지 시도
-                answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, 0.5, top_p, prompt, do_sample=True)
+                answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, min(0.7, temperature+0.1), top_p, prompt, do_sample=True)
                 success = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, v1, namespace)
                 if success != 1.0:
                     bad_config_answer = answer
@@ -270,8 +265,8 @@ def evaluate_llm(
     v1, # Kubernetes client
     form : str = 'Python',
     max_new_tokens: int = 128,
-    temperature: float = 0.7,
-    top_p: float = 0.9,
+    temperature: float = 0.3,
+    top_p: float = 0.8,
     device: Optional[str] = None,
     ):
     if device is None:
@@ -316,76 +311,107 @@ def evaluate_llm(
 ###############################################
 # 1. PPO TRAINING LOOP
 ###############################################
-def run_ppo_training(model_name="gpt2", steps=1000):
+def train_ppo(
+    model_path_or_id: str,
+    mop_data: List[Dict[str, str]],
+    v1, # Kubernetes client
+    form : str = 'Python',
+    output_dir: str = "./tmp/ppo-out",
+    learning_rate: float = 1e-6,
+    target_kl: float = 0.1,
+    max_new_tokens: int = 500,
+    temperature: float = 0.2,
+    top_p: float = 0.8,
+    device: Optional[str] = None,
+    steps: int = 20,
+    ):
     print("\n=== RUNNING PPO TRAINING ===")
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    gc.collect()
+    torch.cuda.empty_cache()
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    lora_config = LoraConfig(
+        r=16,
+        lora_alpha=32,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
+    model = AutoModelForCausalLMWithValueHead.from_pretrained(model_path_or_id, cache_dir=hf_cache_path, 
+                                                              quantization_config=bnb_config,device_map="auto")
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
+    tokenizer = AutoTokenizer.from_pretrained(model_path_or_id, cache_dir=hf_cache_path)
     tokenizer.pad_token = tokenizer.eos_token
 
-    policy = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
-    ref_policy = create_reference_model(policy)
+    ref_model = create_reference_model(model)
 
     # PPO Config with KL control + reward normalization
     config = PPOConfig(
-        model_name=model_name,
-        learning_rate=1e-6,
-        batch_size=8,
-        mini_batch_size=4,
-        steps=steps,
-        adap_kl_ctrl=True,
-        init_kl_coef=0.02,
-        target=3.0,
-        horizon=10_000,
-        whiten_rewards=True,
-        use_score_norm=True,
-        use_score_scaling=True,
-    )
+        output_dir=output_dir,
+        learning_rate=learning_rate,
+        batch_size=3,
+        mini_batch_size=1,
+        gradient_accumulation_steps=4,
+        kl_coef=target_kl,
 
+        report_to="tensorboard",
+        logging_dir=output_dir+'/logs',
+
+    )
     trainer = PPOTrainer(
-        config=config,
-        model=policy,
-        ref_model=ref_policy,
-        tokenizer=tokenizer
+        args=config,
+        model=model,
+        ref_model=ref_model,
+        processing_class=tokenizer,
     )
-
-    prompts = [
-        "Task input example 1",
-        "Task input example 2",
-        "Task input example 3",
-    ]
-
     generation_kwargs = {
-        "max_new_tokens": 64,
+        "max_new_tokens": max_new_tokens,
         "do_sample": True,
-        "top_p": 0.95,
-        "temperature": 0.7,
+        "top_p": top_p,
+        "temperature": temperature,
         "pad_token_id": tokenizer.eos_token_id,
+        "eos_token_id": tokenizer.eos_token_id,
     }
+    writer = SummaryWriter(output_dir+'/logs')
 
+    model_name = model_path_or_id.split('/')[-1]+'_PPO'
     for step in range(steps):
-        batch_prompts = np.random.choice(prompts, size=config.batch_size).tolist()
-        inputs = tokenizer(batch_prompts, return_tensors="pt", padding=True).to(policy.device)
+        batch_samples = random.sample(mop_data, config.batch_size)
+        batch_prompts = [sample['mop'] for sample in batch_samples]
+        vnf_list = [sample['vnf'] for sample in batch_samples]
+        inputs = tokenizer(batch_prompts, return_tensors="pt").to(device)
 
         responses_ids = trainer.generate(inputs["input_ids"], **generation_kwargs)
-        responses = tokenizer.batch_decode(responses_ids, skip_special_tokens=True)
-
+        responses_list = []
+        response_ids_list = []
+        for i in range(config.batch_size):
+            input_len = inputs["input_ids"][i].shape[0]
+            gen_ids = responses_ids[i][input_len:]
+            response_ids_list.append(gen_ids)
+            response = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+            responses_list.append(response)
+            print("#"*40+response+"#"*40)
         # Raw reward → shaping → normalization
         shaped_rewards = []
-        for p, a in zip(batch_prompts, responses):
-            raw = your_python_reward(p, a)
+        original_rewards = []
+        for vnf, a in zip(vnf_list, responses_list):
+            raw = get_reward_from_llm_response(a, form, vnf, model_name, 1, v1, namespace)
+            original_rewards.append(raw)
             shaped = shape_reward(raw)
             shaped_rewards.append(shaped)
 
         reward_tensor = torch.tensor(shaped_rewards, dtype=torch.float32)
-        reward_norm = normalize_rewards(reward_tensor)
+        reward_norm = shape_reward(reward_tensor)
 
         trainer.step(
             queries=list(inputs["input_ids"]),
-            responses=list(responses_ids),
+            responses=list(response_ids_list),
             rewards=[r for r in reward_norm]
         )
-
-        if step % 50 == 0:
+        writer.add_scalar("custom_reward/raw", torch.tensor(original_rewards).mean().item(), step)
+        if step % 10 == 0:
             print(f"[PPO step={step}] mean shaped reward = {reward_tensor.mean().item():.4f}")
 
 
@@ -396,12 +422,12 @@ def train_dpo(
     model_path_or_id: str,
     dpo_rows: List[Dict[str, str]],
     output_dir: str = "./tmp/dpo-out",
-    *,
     per_device_train_batch_size: int = 2,
     learning_rate: float = 2e-6,
     num_train_epochs: int = 1,
     beta: float = 0.1,
     device: Optional[str] = None,
+    logging_steps: int = 1,
 ):
     """
     dpo_rows(list of dict)로 Dataset 만든 뒤 TRL의 DPOTrainer로 학습합니다.
@@ -441,7 +467,9 @@ def train_dpo(
         num_train_epochs=num_train_epochs,
         beta=beta,
         remove_unused_columns=False,
-        logging_steps=10,
+        logging_steps=logging_steps,
+        logging_dir=output_dir+'/logs',
+        report_to='tensorboard',
         save_steps=200,
     )
 
@@ -461,13 +489,10 @@ if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
     argparser.add_argument('--Ansible', action='store_true')
     argparser.add_argument('--Python', action='store_true')
-    argparser.add_argument('--RAG', action='store_true')
-    argparser.add_argument('--skip', action='store_true', help= "Skip MOPs in 'already_don.py'. Using when terminating unexpected")
-    argparser.add_argument('--test', action='store_true', help='Test only 3 MOPs for testing')
-    argparser.add_argument('--no-log', action='store_true', help= 'Do not log the result')
-    argparser.add_argument('--judge', action='store_true', help= 'judge LLM in RAG')
-    argparser.add_argument('--method', default = 'dpo', choices = ['dpo', 'ppo'])
+    #argparser.add_argument('--RAG', action='store_true')
+    #argparser.add_argument('--method', default = 'dpo', choices = ['dpo', 'ppo'])
     argparser.add_argument('--load-data', type=str, default=None, help='Path to the DPO dataset to load')
+    argparser.add_argument('--test', action='store_true', help='Test with small number of MOPs for quick run')
 
     argparser=argparser.parse_args()
     mop_file_path = '../mop/Intergrated/'
@@ -477,7 +502,7 @@ if __name__ == '__main__':
     apps_v1 = client.AppsV1Api()
     form='Python' if argparser.Python else 'Ansible'
 
-    mop_data = read_mop_file(mop_file_path)
+    mop_data = read_mop_file(mop_file_path, test=argparser.test)
     if argparser.load_data is not None:
         import pickle
         with open(argparser.load_data, 'rb') as f:
@@ -509,8 +534,15 @@ if __name__ == '__main__':
         num_train_epochs=3,
         beta=0.1,
     )
-    evaluate_llm(
+    train_ppo(
         model_path_or_id='./tmp/dpo_qwen2.5_7b_k8s',
+        mop_data=mop_data,
+        v1=v1,
+        form=form,
+        output_dir='./tmp/ppo_dpo_qwen2.5_7b_k8s',
+    )
+    evaluate_llm(
+        model_path_or_id='./tmp/ppo_dpo_qwen2.5_7b_k8s',
         mop_data=mop_data,
         v1=v1,
         form=form,
