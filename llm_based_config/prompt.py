@@ -4,7 +4,7 @@ from secret import JUMP_HOST_IP, JUMP_HOST_PWD
 
 #pod_name = 'cnf-pod'
 namespace = 'llm-config'
-DNS_IP = '10.99.30.112'
+DNS_IP = '10.244.0.2'
 def read_good_example(method, platform, example_path = 'Good_Example/'):
     good_example = {}
     for file in os.listdir(example_path):
@@ -73,7 +73,7 @@ def prompt(lang, system):
 
         # Kubernetes Python code part is just copy version of OpenStack. need change.
         elif system == 'Kubernetes':
-            good_example_prefix = "\nMOP ends. Also, here are 'example' codes to create and configure a VNF in Kubernetes using Python with Kubernetes library for reference. \n" 
+            good_example_prefix = "\nMOP ends.\nAlso, here are 'example' codes to create and configure a VNF in Kubernetes using Python with Kubernetes library for reference. \n" 
             prompts_1 = f'''You are an Kubernetes cloud expert. 
             Please write Python code that creates a Kubernetes Pod and installs a VNF inside it, taking the following points into consideration.
             You don't have to explain your code. Keep your answer code-focused and as simple as possible.
