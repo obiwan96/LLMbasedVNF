@@ -60,7 +60,7 @@ def multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,sy
         process_time[model] = []
     vm_num = {}
     total_start_time = time.time() 
-    target_datetime = datetime.now(pytz.utc)
+    target_datetime = str(datetime.now(pytz.utc))
     for mop_file in tqdm(mop_list):
         if not (mop_file in already_done):
             continue

@@ -171,7 +171,7 @@ if __name__ == '__main__':
                 middle_data = pkl.load(f)
             first_create_success_num, create_success_num, first_config_success_num, config_success_num, process_time = middle_data
     total_start_time = time.time() 
-    target_datetime = datetime.now(pytz.utc)
+    target_datetime = str(datetime.now(pytz.utc))
     #floating_server = make_new_floating_ip(conn)
     #if not floating_server:
     #    print('Make flaoting IP failed')

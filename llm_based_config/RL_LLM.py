@@ -12,6 +12,7 @@ import logging
 import random
 import gc
 import math
+from datetime import datetime
 
 #from RAG import RAG
 from kubernetes_config import *
@@ -162,7 +163,7 @@ def get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, to
 
     input_len = enc["input_ids"].shape[1]
     output_len = out_ids.shape[1]
-    print("\n##>> input_len:", input_len, "output_len:", output_len, "new_tokens:", output_len - input_len)
+    #print("\n##>> input_len:", input_len, "output_len:", output_len, "new_tokens:", output_len - input_len)
     gen_ids = out_ids[0][input_len:]
     # 디코딩
     answer = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
@@ -221,6 +222,7 @@ def generate_io_pairs(
     temperature: float = 0.3,
     top_p: float = 0.8,
     device: Optional[str] = None,
+    steps: int = 5,
 ) -> List[Dict[str, str]]:
     """
     MOP data (list[dict[str, str]])를 받아 LLM 출력 생성 후,
@@ -243,38 +245,39 @@ def generate_io_pairs(
     vm_num = {}
     # 배치로 처리하고 싶으면 batch_size를 추가로 받아서 chunking하면 됨.
     model_name = model_path_or_id.split('/')[-1]
-    for single_mop_data in mop_data:
-        prompt = single_mop_data['mop']
-        vnf = single_mop_data['vnf']
-        if vnf not in vm_num:
-            vm_num[vnf] = 1
-        else:
-            vm_num[vnf] += 1
-        lang = single_mop_data['lang']
-        vm_name = single_mop_data['vm_name']
-        enc = build_enc(tokenizer, prompt, max_input_tokens=8192)
-        first_device = next(model.parameters()).device
-        enc = {k: v.to(first_device) for k, v in enc.items()}
-        print ('\n'+'#'*50)
-        print (f'## Generating IO pairs for VNF: {vnf}, Language: {lang}, VM: {vm_name}, MOP:')
-        #print(prompt)
-        #print('\n ## Now here is answer')
-        answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p, prompt, do_sample=True)
-        #print(answer)
+    for _ in range(steps):
+        for single_mop_data in mop_data:
+            prompt = single_mop_data['mop']
+            vnf = single_mop_data['vnf']
+            if vnf not in vm_num:
+                vm_num[vnf] = 1
+            else:
+                vm_num[vnf] += 1
+            lang = single_mop_data['lang']
+            vm_name = single_mop_data['vm_name']
+            enc = build_enc(tokenizer, prompt, max_input_tokens=8192)
+            first_device = next(model.parameters()).device
+            enc = {k: v.to(first_device) for k, v in enc.items()}
+            print ('\n'+'#'*50)
+            print (f'## Generating IO pairs for VNF: {vnf}, Language: {lang}, VM: {vm_name}, MOP:')
+            #print(prompt)
+            #print('\n ## Now here is answer')
+            answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p, prompt, do_sample=True)
+            #print(answer)
 
-        # Test in NDT
-        success = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
-        if success == 1.0:
-            good_config_answer = answer
-            print('## Good configuration example generated successfully.')
-            for _ in range(5):  # 최대 5번까지 시도
-                answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, min(0.7, temperature+0.1), top_p, prompt, do_sample=True)
-                success = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
-                if success != 1.0:
-                    bad_config_answer = answer
-                    break
-            print('## Bad configuration example generated successfully, added to IO pairs.')
-            results.append({"input": prompt, "chosen": good_config_answer, "rejected": bad_config_answer})
+            # Test in NDT
+            success = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
+            if success == 1.0:
+                good_config_answer = answer
+                print('## Good configuration example generated successfully.')
+                for _ in range(5):  # 최대 5번까지 시도
+                    answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, min(0.7, temperature+0.1), top_p, prompt, do_sample=True)
+                    success = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
+                    if success != 1.0:
+                        bad_config_answer = answer
+                        break
+                print('## Bad configuration example generated successfully, added to IO pairs.')
+                results.append({"input": prompt, "chosen": good_config_answer, "rejected": bad_config_answer})
     print (f'Total {len(results)} IO pairs generated for DPO training.')
     return results
 
@@ -451,24 +454,24 @@ def train_grpo(
     k8s_client,  # Kubernetes client
     form: str = "Python",
     output_dir: str = "./tmp/grpo-out",
-    learning_rate: float = 1e-6,
-    beta_kl: float = 0.1,              # PPO의 kl_coef/target_kl 대응 (GRPOConfig.beta)
+    learning_rate: float = 1e-5,
+    beta_kl: float = 0.005,              # PPO의 kl_coef/target_kl 대응 (GRPOConfig.beta)
     max_new_tokens: int = 500,         # GRPOConfig.max_completion_length 대응
-    temperature: float = 0.2,
-    top_p: float = 0.8,
-    device: Optional[str] = None,      # (참고) GRPOTrainer가 보통 accelerate로 device를 잡습니다.
-    steps: int = 40,
-    batch_size: int = 3,               # PPOConfig.batch_size 대응 (per_device_train_batch_size)
+    temperature: float = 0.7,
+    top_p: float = 0.9,
+    steps: int = 80,
+    batch_size: int = 4,               # PPOConfig.batch_size 대응 (per_device_train_batch_size)
     grad_accum: int = 4,               # PPO의 gradient_accumulation_steps 대응
-    num_generations: int = 2,          # ⭐ GRPO 핵심: 프롬프트당 completion 개수(G). 최소 2 권장
+    num_generations: int = 8,          # ⭐ GRPO 핵심: 프롬프트당 completion 개수(G). 최소 2 권장, batch_size의 배수 여야함!!!
+    num_prompts_per_step: int = 4,
     scale_rewards: str = "group",      # "group"(기본) / "batch" / False 등
-    log_completions: bool = True,
-    num_completions_to_print: int = 6,
+    log_completions: bool = False,
+    num_completions_to_print: int = 0,
     ):
     gc.collect()
     torch.cuda.empty_cache()
     v1, apps_v1 = k8s_client
-
+    output_dir_logs = os.path.join(output_dir, "logs_"+datetime.now().strftime('%m%d_%H%M'))
     # ✅ 1) 모델/토크나이저 로드 (GRPO는 ValueHead 불필요)
     lora_config = LoraConfig(
         r=16,
@@ -508,7 +511,7 @@ def train_grpo(
         "vnf": x["vnf"],
     } for x in mop_data]
     train_dataset = Dataset.from_list(train_rows)
-    writer = SummaryWriter(os.path.join(output_dir, "logs"))
+    writer = SummaryWriter(output_dir_logs)
     _cache = {"step": None, "raw": [], "shaped": []}
 
     model_name = model_path_or_id.split("/")[-1] + "_GRPO"
@@ -531,10 +534,10 @@ def train_grpo(
             vnf = [v for v in vnf for _ in range(reps)]
             prompts = [p for p in prompts for _ in range(reps)]
         for v, comp, prompt in zip(vnf, completions, prompts):
-            print(f"## VNF: {v}, #prompts: {len(prompt)}, #completions: {len(comp)}")
+            #print(f"## VNF: {v}, #prompts: {len(prompt)}, #completions: {len(comp)}")
             raw = get_reward_from_llm_response(comp, form, v, model_name, {v:1}, k8s_client, namespace, logging=True)
             raw_rewards.append(float(raw))
-            shaped.append(float(shape_reward(raw)))
+            shaped.append(5.0*float(shape_reward(raw)))
 
         shaped_t = torch.tensor(shaped, dtype=torch.float32)
         #norm_t = shape_reward(shaped_t) 
@@ -570,10 +573,11 @@ def train_grpo(
         max_steps=steps,                 # PPO의 for-step 루프를 그대로 “스텝 수”로 대응
         logging_steps=1,
         report_to=["tensorboard"],
-        logging_dir=os.path.join(output_dir, "logs"),
+        logging_dir=output_dir_logs,
 
         # generation 관련
         max_prompt_length=8192, 
+        generation_batch_size=num_generations*num_prompts_per_step,
         num_generations=num_generations,
         max_completion_length=max_new_tokens,
         temperature=temperature,
@@ -589,7 +593,7 @@ def train_grpo(
         bf16=True,
         fp16=False,
 
-        # completions 로그 (프린트/로깅)
+        # completions 로그 (프린트/로깅, CLI에 출력됨.)
         log_completions=log_completions,
         num_completions_to_print=num_completions_to_print,
     )
@@ -620,7 +624,7 @@ def train_dpo(
     per_device_train_batch_size: int = 2,
     learning_rate: float = 2e-6,
     num_train_epochs: int = 1,
-    beta: float = 0.1,
+    beta: float = 0.03,
     device: Optional[str] = None,
     logging_steps: int = 1,
 ):
@@ -629,6 +633,7 @@ def train_dpo(
     """
     gc.collect()
     torch.cuda.empty_cache()
+    output_dir_logs = os.path.join(output_dir, "logs_"+datetime.now().strftime('%m%d_%H%M'))
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -663,7 +668,7 @@ def train_dpo(
         beta=beta,
         remove_unused_columns=False,
         logging_steps=logging_steps,
-        logging_dir=output_dir+'/logs',
+        logging_dir=output_dir_logs,
         report_to='tensorboard',
         save_steps=200,
     )
@@ -688,6 +693,7 @@ if __name__ == '__main__':
     argparser.add_argument('--method', default = 'dpo', choices = ['dpo', 'ppo', 'grpo', 'dpo-ppo','dpo-grpo'])
     argparser.add_argument('--load-data', type=str, default=None, help='Path to the DPO dataset to load')
     argparser.add_argument('--test', action='store_true', help='Test with small number of MOPs for quick run')
+    argparser.add_argument('--evaluate-first', action='store_true', help='Evaluate the base model before training')
 
     argparser=argparser.parse_args()
     mop_file_path = '../mop/Intergrated/'
@@ -698,38 +704,45 @@ if __name__ == '__main__':
     form='Python' if argparser.Python else 'Ansible'
 
     mop_data = read_mop_file(mop_file_path, test=argparser.test)
-    '''evaluate_llm(
-        model_path_or_id='Qwen/Qwen2.5-7B-Instruct',
-        mop_data=mop_data,
-        k8s_client=(v1,apps_v1),
-        form=form,
-        max_new_tokens=1000,
-    )'''
     model_path_or_id='Qwen/Qwen2.5-7B-Instruct'
+    if argparser.evaluate_first:
+        evaluate_llm(
+            model_path_or_id=model_path_or_id,
+            mop_data=mop_data,
+            k8s_client=(v1,apps_v1),
+            form=form,
+            max_new_tokens=1000,
+        )
     if 'dpo' in argparser.method:
+        dpo_data_num = 100
+        current_data_num = 0
         if argparser.load_data is not None:
             import pickle
             with open(argparser.load_data, 'rb') as f:
                 input_io_pairs = pickle.load(f)
-        else:
-            input_io_pairs = generate_io_pairs(
+            current_data_num = len(input_io_pairs)
+            print (f'Loaded {current_data_num} IO pairs from {argparser.load_data}')
+        while current_data_num < dpo_data_num:
+            new_input_io_pairs = generate_io_pairs(
                 model_path_or_id=model_path_or_id,
                 mop_data=mop_data,
                 k8s_client=(v1,apps_v1),
                 form=form,
                 max_new_tokens=1000,
             )
-            with open('tmp/dpo_dataset.pkl' , 'wb') as f:
-                import pickle
-                pickle.dump(input_io_pairs, f)
+            input_io_pairs = input_io_pairs + new_input_io_pairs if current_data_num > 0 else new_input_io_pairs
+            current_data_num = len(input_io_pairs)
+        input_io_pairs = input_io_pairs[:dpo_data_num]
+        print (f'Total {len(input_io_pairs)} IO pairs ready for DPO training.')
+        with open('tmp/dpo_dataset.pkl' , 'wb') as f:
+            import pickle
+            pickle.dump(input_io_pairs, f)
         train_dpo(
             model_path_or_id=model_path_or_id,
             dpo_rows=input_io_pairs,
             output_dir='./tmp/dpo_qwen2.5_7b_k8s',
             per_device_train_batch_size=1,
-            learning_rate=2e-6,
             num_train_epochs=3,
-            beta=0.1,
         )
         model_path_or_id='./tmp/dpo_qwen2.5_7b_k8s'
     if 'ppo' in argparser.method:
@@ -748,10 +761,8 @@ if __name__ == '__main__':
             k8s_client=(v1,apps_v1),
             form=form,
             output_dir='./tmp/grpo_qwen2.5_7b_k8s',
-            steps=80,
-            batch_size=3,
+            steps=120,
             grad_accum=2,
-            num_generations=3,
             max_new_tokens=1000,
         )
         model_path_or_id='./tmp/grpo_qwen2.5_7b_k8s'

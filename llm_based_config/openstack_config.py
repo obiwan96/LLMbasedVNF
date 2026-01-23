@@ -266,6 +266,8 @@ def test_openstack_configuration(server, vnf, model, vm_num, conn, floating_serv
         return e
 
 def delete_vms_after(conn, target_time, logging_=False):
+    if isinstance(target_time, str):
+        target_time = datetime.fromisoformat(target_time)
     servers = conn.compute.servers(details=True)
     #print(f'target time: {target_time}')
     deleted_count = 0
