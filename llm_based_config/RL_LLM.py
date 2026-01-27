@@ -189,16 +189,36 @@ def get_reward_from_llm_response(answer: str, form: str, vnf: str, model_name: s
             # Both Creation and Configuration Success
             reward = 1.0
         # Now, make reward based on status code.
-        elif second_test_result == 1:
+        elif second_test_result == 1: #Can't find code in LLM's response
             reward = 0.0
-        elif second_test_result == 2:
-            reward = 0.8
-        elif second_test_result in [10, 11, 12, 13, 14]:
+        elif second_test_result == 2: #VNF does not work as intended
+            reward = 0.9
+        elif second_test_result == 10: #Code parsing fail
+            reward = 0.05
+        elif second_test_result == 14: #'create_pod' does not exist in code
+            reward = 0.1
+        elif second_test_result == 13: # Error while import 'create_pod'
             reward = 0.2
-        elif second_test_result in [20, 21, 22, 23]:
-            reward = 0.4
+        elif second_test_result in [11, 12]: # Need change in code. include none-kubernetes cde or infinite loop
+            reward = 0.3
+        elif second_test_result in [20, 21, 22, 23]: # Error occured during running 'pod_creation'
+            if second_test_result == 23: # Ansible run status error
+                reward = 0.35
+            elif second_test_result == 21: # Little bigger error occure than 20. 20 has error log
+                reward = 0.4
+            else: # 20, 22. Small error occur during pod creation
+                reward = 0.45
         elif second_test_result in [30, 31, 32, 33, 41, 43, 51, 90, 91]:
-            reward = 0.6
+            if second_test_result in [30, 33, 43]: # Error occur while VNF configuring, Container error, error while searching Pod
+                reward = 0.5
+            elif second_test_result in [31, 41]: #Can't find Pod(wron namespace or wrong host name)
+                reward = 0.6
+            elif second_test_result in [90, 91]: # Code running timeout
+                reward = 0.7
+            elif second_test_result == 51: # VNF configuration code return False
+                reward = 0.75
+            else: # 32. code need to include 'sliiep infinity' to container keep on.
+                reward = 0.8
         else:
             print( '## Unknown error code from configuration test:', second_test_result)
             return None
@@ -270,14 +290,18 @@ def generate_io_pairs(
             if success == 1.0:
                 good_config_answer = answer
                 print('## Good configuration example generated successfully.')
+                bad_config_answer = None
                 for _ in range(5):  # 최대 5번까지 시도
                     answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, min(0.7, temperature+0.1), top_p, prompt, do_sample=True)
                     success = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
                     if success != 1.0:
                         bad_config_answer = answer
                         break
-                print('## Bad configuration example generated successfully, added to IO pairs.')
-                results.append({"input": prompt, "chosen": good_config_answer, "rejected": bad_config_answer})
+                if bad_config_answer is None:
+                    print('## Failed to generate bad configuration example after multiple attempts, skipping this pair.')
+                else:
+                    print('## Bad configuration example generated successfully, added to IO pairs.')
+                    results.append({"input": prompt, "chosen": good_config_answer, "rejected": bad_config_answer})
     print (f'Total {len(results)} IO pairs generated for DPO training.')
     return results
 
@@ -692,6 +716,7 @@ if __name__ == '__main__':
     #argparser.add_argument('--RAG', action='store_true')
     argparser.add_argument('--method', default = 'dpo', choices = ['dpo', 'ppo', 'grpo', 'dpo-ppo','dpo-grpo'])
     argparser.add_argument('--load-data', type=str, default=None, help='Path to the DPO dataset to load')
+    argparser.add_argument('--load-model', type=str, default=None, help='Path to the model to load')
     argparser.add_argument('--test', action='store_true', help='Test with small number of MOPs for quick run')
     argparser.add_argument('--evaluate-first', action='store_true', help='Evaluate the base model before training')
 
@@ -704,7 +729,10 @@ if __name__ == '__main__':
     form='Python' if argparser.Python else 'Ansible'
 
     mop_data = read_mop_file(mop_file_path, test=argparser.test)
-    model_path_or_id='Qwen/Qwen2.5-7B-Instruct'
+    if argparser.load_model is not None:
+        model_path_or_id=argparser.load_model
+    else:
+        model_path_or_id='Qwen/Qwen2.5-7B-Instruct'
     if argparser.evaluate_first:
         evaluate_llm(
             model_path_or_id=model_path_or_id,
@@ -714,7 +742,7 @@ if __name__ == '__main__':
             max_new_tokens=1000,
         )
     if 'dpo' in argparser.method:
-        dpo_data_num = 100
+        dpo_data_num = 200
         current_data_num = 0
         if argparser.load_data is not None:
             import pickle
