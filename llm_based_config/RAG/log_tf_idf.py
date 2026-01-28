@@ -11,6 +11,11 @@ import pandas as pds
 import random
 import json
 import matplotlib.pyplot as plt
+import nltk
+try:
+    nltk.data.find("corpora/wordnet")
+except LookupError:
+    nltk.download("wordnet")
 from nltk.corpus import wordnet
 import pickle as pkl
 from numpy import log as ln

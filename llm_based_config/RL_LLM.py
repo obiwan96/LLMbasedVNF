@@ -1,3 +1,4 @@
+from curses import raw
 from already_done import already_done
 #from langchain.chat_models import ChatOpenAI
 import argparse
@@ -14,7 +15,7 @@ import gc
 import math
 from datetime import datetime
 
-#from RAG import RAG
+from RAG import RAG
 from kubernetes_config import *
 from kubernetes import client, config
 from typing import List, Dict, Optional
@@ -172,6 +173,7 @@ def get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, to
 
 def get_reward_from_llm_response(answer: str, form: str, vnf: str, model_name: str, vm_num: dict, k8s_client, namespace: str, logging:bool=False) -> float:
     logging_file = f'tmp/rl_llm_response_log.txt'
+    second_message = None
     if logging:        
         with open(logging_file, 'a') as f:
             f.write(f" --- Trial for VNF: {vnf}, Model: {model_name}, VM number: {vm_num[vnf]} --- \n")
@@ -184,7 +186,9 @@ def get_reward_from_llm_response(answer: str, form: str, vnf: str, model_name: s
     if test_result == 0: # Creation Success
         second_test_result, second_message = test_K8S_configuration(server_or_message, vnf, v1, namespace)
         delete_pod(v1, server_or_message, namespace)
-        print(f'## Creation success, status code: {second_test_result}')
+        #print(f'## Creation success, status code: {second_test_result}')
+        with open(logging_file, 'a') as f:
+            f.write(f'## Creation success, status code: {second_test_result}')
         if second_test_result == 0:
             # Both Creation and Configuration Success
             reward = 1.0
@@ -220,14 +224,18 @@ def get_reward_from_llm_response(answer: str, form: str, vnf: str, model_name: s
             else: # 32. code need to include 'sliiep infinity' to container keep on.
                 reward = 0.8
         else:
-            print( '## Unknown error code from configuration test:', second_test_result)
+            print('## Unknown error code from configuration test:', second_test_result)
             return None
     else:
-        print('## Creation failed')
+        with open(logging_file, 'a') as f:
+            f.write('## Creation failed')
+        #print('## Creation failed')
+        second_message = server_or_message
+        second_test_result = test_result
         # VM Creation failed
         reward = 0.0
     delete_all_pods(v1, apps_v1)
-    return reward
+    return reward, (second_test_result, second_message)
 ###############################################
 # Generate IO Pairs for DPO Training
 # Input data for DPO should be in the form of
@@ -265,7 +273,7 @@ def generate_io_pairs(
     vm_num = {}
     # 배치로 처리하고 싶으면 batch_size를 추가로 받아서 chunking하면 됨.
     model_name = model_path_or_id.split('/')[-1]
-    for _ in range(steps):
+    for step_num in range(steps):
         for single_mop_data in mop_data:
             prompt = single_mop_data['mop']
             vnf = single_mop_data['vnf']
@@ -286,14 +294,14 @@ def generate_io_pairs(
             #print(answer)
 
             # Test in NDT
-            success = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
+            success, _ = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
             if success == 1.0:
                 good_config_answer = answer
                 print('## Good configuration example generated successfully.')
                 bad_config_answer = None
-                for _ in range(5):  # 최대 5번까지 시도
+                for try_num in range(5):  # 최대 5번까지 시도
                     answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, min(0.7, temperature+0.1), top_p, prompt, do_sample=True)
-                    success = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
+                    success, _ = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
                     if success != 1.0:
                         bad_config_answer = answer
                         break
@@ -355,12 +363,97 @@ def evaluate_llm(
         vm_name = single_mop_data['vm_name']
         enc = build_enc(tokenizer, prompt, max_input_tokens=8192)
         answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p, prompt)
-        success = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
+        success, _ = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
         if success == 1.0:
             success_num+=1
     print (f'## Evaluation completed. Success rate: {success_num}/{len(mop_data)}')
     return success_num/len(mop_data)
 
+def select_request_message(test_result: int, form: str, vnf: str, server_or_message=None) -> tuple[str, str, str]:
+    # RAG setting
+    rag_threshold = 0.8
+    db_list=['RAG/stackoverflow_docs.db', 'RAG/kubernetes_docs.db']
+    if form == 'Ansible':
+        db_list.append('RAG/ansible_docs.db')
+    collection, embed_model = RAG.RAG_init(db_list, embed_model='fine-tuned', new=True)
+
+    request_message = ''
+    inform_message = ''
+    error_message = ''
+    if test_result == 1:
+        request_message = f"I can't find {form} code in your response. Please modify it."
+    elif test_result == 10:
+        request_message = f"I failed to parse your {form} code. Please check the format and modify it."
+    elif test_result == 11:
+        server_or_message= "Your YAML code runs on localhost or Kubernetes nodes, but there's no task to perform there. Please update it to run only inside Kubernetes."
+    elif test_result == 12:
+        inform_message = "I found infinite loop in your code. "
+        request_message = "Please modify your code to avoid infinite loop."
+    elif test_result == 14:
+        inform_message = "I can not find 'create_pod' function in your code. "
+        request_message = 'Please check and modify your code.'
+        if server_or_message:
+            error_message = server_or_message
+    elif test_result == 20: #RAG
+        inform_message = 'While running your code, Pod error occured. Here are the logs from pods.\n'
+        error_message = server_or_message
+    elif test_result == 21: 
+        inform_message = f'While running your code, Pod fell into {server_or_message} phase.\n'
+    elif test_result == 22:
+        inform_message = 'While running your code in my local machine, I got this exception.\n'+ str(server_or_message)
+    elif test_result == 23:#RAG
+        status, ansible_output = server_or_message
+        inform_message = 'While running your code, Ansible runner result is ' + status + '.\n'
+        error_message = str(ansible_output)
+    elif test_result == 31:
+        request_message = "It doesn't seem to be set to variable for 'pod_name' and 'namespace' in the created pod. Modify it to set to variable."
+    elif test_result == 41:
+        request_message = 'There was a task that was skipped due to an incorrect host name. Please correct the host name to use variable.'
+    elif test_result == 43:
+        print('43 error occured. somthing wrong?')
+        inform_message = 'I got exception while finding pod in Kubernetes.'
+        request_message = 'Please check the pod name and namespace are using variable, and correct it.'
+    elif test_result == 51:#RAG
+        inform_message = "When I run your code, 'create_pod' function returned False. And here are stdout from the function.\n"
+        request_message = 'Please check your code and modify it run well.'
+        error_message = server_or_message
+    elif test_result == 90:#RAG
+        inform_message = 'While running your code, Ansible runner takes too long time to run. It seems that your code is not running well.'
+        error_message = server_or_message
+        request_message = 'Please check your code and modify it to run well.'
+    elif test_result == 91:
+        inform_message = "While running your code, container didn't get ready for a long time. It seems that your code is not running well."
+        request_message = 'Please check your code and modify it to run well.'
+    elif test_result == 2:
+        inform_message = server_or_message
+    elif test_result == 31:
+        inform_message = "It doesn't seem to be set to variable for 'pod_name' and 'namespace' in the created pod. Modify it to set to variable."
+    elif test_result == 32:
+        if server_or_message:
+            inform_message = f"After I run your code, the container '{server_or_message}' exited."
+        else:
+            inform_message = "After I run your code, the container exited."                             
+        request_message = "Please modify your code by adding 'sleep infinity' so that the container does not turn off. Please show me the updated version.\n"                        
+    elif test_result == 30:
+        inform_message = 'While configure VNF with your code, I got this error. \n'
+        error_message = server_or_message
+    elif test_result == 33:
+        container, error_code, error_message = server_or_message
+        inform_message = f"An error with error code {error_code} occurred in the container '{container}' while operating your code. It means "
+
+    if test_result not in [2, 31, 32]:
+        retrieved_docs=RAG.RAG_search(error_message, collection, embed_model, vnf_name=vnf, use_tf_idf = False)
+        retrieved_texts=''
+        retrieved_well = False
+        for retrieved_doc in retrieved_docs:
+            if retrieved_doc['distance'] <rag_threshold:
+                retrieved_texts += retrieved_doc['text']+'\n'
+                retrieved_well = True
+        if retrieved_well:
+            request_message += '\nHere are some documents that may help you to modify your code:\n'+ retrieved_texts
+    if request_message =='':
+        request_message='Please correct your code and return the updated version by refering MOP again to configure VNF correctly.\n'
+    return inform_message, request_message, error_message
 ###############################################
 # 1. PPO TRAINING LOOP
 ###############################################
@@ -455,7 +548,7 @@ def train_ppo(
         shaped_rewards = []
         original_rewards = []
         for vnf, a in zip(vnf_list, responses_list):
-            raw = get_reward_from_llm_response(a, form, vnf, model_name, 1, k8s_client, namespace)
+            raw, _ = get_reward_from_llm_response(a, form, vnf, model_name, 1, k8s_client, namespace)
             original_rewards.append(raw)
             shaped = shape_reward(raw)
             shaped_rewards.append(shaped)
@@ -494,7 +587,6 @@ def train_grpo(
     ):
     gc.collect()
     torch.cuda.empty_cache()
-    v1, apps_v1 = k8s_client
     output_dir_logs = os.path.join(output_dir, "logs_"+datetime.now().strftime('%m%d_%H%M'))
     # ✅ 1) 모델/토크나이저 로드 (GRPO는 ValueHead 불필요)
     lora_config = LoraConfig(
@@ -559,7 +651,7 @@ def train_grpo(
             prompts = [p for p in prompts for _ in range(reps)]
         for v, comp, prompt in zip(vnf, completions, prompts):
             #print(f"## VNF: {v}, #prompts: {len(prompt)}, #completions: {len(comp)}")
-            raw = get_reward_from_llm_response(comp, form, v, model_name, {v:1}, k8s_client, namespace, logging=True)
+            raw, _ = get_reward_from_llm_response(comp, form, v, model_name, {v:1}, k8s_client, namespace, logging=True)
             raw_rewards.append(float(raw))
             shaped.append(5.0*float(shape_reward(raw)))
 
@@ -638,6 +730,216 @@ def train_grpo(
     trainer.save_model(output_dir)
     print(f"\n✅ GRPO training finished. Saved to: {output_dir}")
 
+def train_grpo_trajectory(
+    model_path_or_id: str,
+    mop_data: List[Dict[str, str]],
+    k8s_client,
+    form: str = "Python",
+    gamma: float = 0.7,                 # r2 가중치
+    bonus_reward: float = 0.3,
+    cost_reward: float = 0.1,
+    output_dir: str = "./tmp/grpo-traj-out",
+    learning_rate: float = 1e-5,
+    beta_kl: float = 0.005,
+    max_new_tokens: int = 500,
+    temperature: float = 0.7,
+    top_p: float = 0.9,
+    steps: int = 80,
+    batch_size: int = 4,
+    grad_accum: int = 4,
+    num_generations: int = 8,
+    num_prompts_per_step: int = 4,
+    scale_rewards: str = "group",
+    log_completions: bool = False,
+    num_completions_to_print: int = 0,
+):
+    gc.collect()
+    torch.cuda.empty_cache()
+    output_dir_logs = os.path.join(output_dir, "logs_"+datetime.now().strftime('%m%d_%H%M'))
+
+    # -------------------------------
+    # 1) Model / Tokenizer
+    # -------------------------------
+    lora_config = LoraConfig(
+        r=16,
+        lora_alpha=32,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path_or_id,
+        cache_dir=hf_cache_path,
+        quantization_config=bnb_config,
+        device_map="auto",
+        torch_dtype=torch.bfloat16,
+    )
+    model = prepare_model_for_kbit_training(model)
+    model = get_peft_model(model, lora_config, autocast_adapter_dtype=False)
+    model.print_trainable_parameters()
+    for name, p in model.named_parameters():
+        if "lora_" in name and p.dtype == torch.float32:
+            p.data = p.data.to(torch.bfloat16)
+    if hasattr(model, "lm_head") and model.lm_head is not None:
+        model.lm_head = model.lm_head.to(torch.bfloat16)
+    tokenizer = AutoTokenizer.from_pretrained(model_path_or_id, cache_dir=hf_cache_path)
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+
+    # -------------------------------
+    # 2) Dataset (prompt only)
+    # -------------------------------
+    train_rows = [{
+        "prompt": render_chat_prompt(tokenizer, x["mop"]),
+        "vnf": x["vnf"],
+    } for x in mop_data]
+
+    train_dataset = Dataset.from_list(train_rows)
+    model_name = model_path_or_id.split("/")[-1] + "_GRPO_traj"
+    writer = SummaryWriter(output_dir_logs)
+    _cache = {"step": None, "raw": [], "shaped": []}
+
+    # -------------------------------
+    # 3) Trajectory reward function
+    # -------------------------------
+    def trajectory_reward_func(prompts, completions, vnf, trainer_state=None, **kwargs):
+        """
+        completions: List[str]  # each is (a1) or (a1 + a2)
+        reward = r1 + bonus(if success) + gamma * (r2-cost)
+        """
+        rewards = []
+        shaped = []
+
+        for prompt, comp, v in zip(prompts, completions, vnf):
+
+            # ---- split a1 / a2 ----
+            # 규칙: <<<SECOND_TEST>>> 토큰 기준
+            if "<<<SECOND_TEST>>>" in comp:
+                a1, a2 = comp.split("<<<SECOND_TEST>>>", 1)
+            else:
+                a1, a2 = comp, None
+
+            # ---- r1 ----
+            r1, _ = get_reward_from_llm_response(a1, form, v, model_name,{v: 1}, k8s_client, namespace, logging=False)
+            if r1 == 1.0:
+                r1 += bonus_reward # 성공 보너스
+
+            # ---- r2 ----
+            r2 = 0.0
+            if a2 is not None:
+                r2, _ = get_reward_from_llm_response(a2, form, v, model_name,{v: 1}, k8s_client, namespace, logging=False)
+                r2 -= cost_reward  # RAG 비용 패널티
+
+            total_reward = r1 + gamma * r2
+            rewards.append(total_reward)
+            shaped.append(5.0*float(shape_reward(total_reward)))
+        shaped_t = torch.tensor(shaped, dtype=torch.float32)
+        if trainer_state is not None:
+            step = int(trainer_state.global_step)
+
+            # step이 바뀌면 이전 step flush
+            if _cache["step"] is not None and step != _cache["step"]:
+                if _cache["raw"]:                    
+                    writer.add_scalar("custom_reward/raw_mean", sum(_cache["raw"]) / len(_cache["raw"]), _cache["step"])
+                    writer.add_scalar("custom_reward/shaped_mean", sum(_cache["shaped"]) / len(_cache["shaped"]), _cache["step"])
+                _cache["raw"].clear()
+                _cache["shaped"].clear()
+
+            _cache["step"] = step
+            _cache["raw"].extend(rewards)
+            _cache["shaped"].extend(shaped)
+        assert all(math.isfinite(r) for r in shaped_t)
+
+        return [float(x) for x in shaped_t.detach().cpu().tolist()]
+
+    # -------------------------------
+    # 4) GRPO Config
+    # -------------------------------
+    args = GRPOConfig(
+        output_dir=output_dir,
+        learning_rate=learning_rate,
+        per_device_train_batch_size=batch_size,
+        gradient_accumulation_steps=grad_accum,
+        max_steps=steps,
+        logging_steps=1,
+        report_to=["tensorboard"],
+        logging_dir=output_dir_logs,
+
+        max_prompt_length=8192+max_new_tokens*2, # to make a2, we should put a1 and rag result in prompt
+        generation_batch_size=num_generations * num_prompts_per_step,
+        num_generations=num_generations,
+        max_completion_length=max_new_tokens * 2,  # a1 + a2 대비
+        temperature=temperature,
+        top_p=top_p,
+
+        beta=beta_kl,
+        scale_rewards=scale_rewards,
+        bf16=True,
+        fp16=False,
+        log_completions=log_completions,
+        num_completions_to_print=num_completions_to_print,
+    )
+
+    # -------------------------------
+    # 5) Custom rollout via Trainer
+    # -------------------------------
+    class TrajectoryGRPOTrainer(GRPOTrainer):
+        def _generate_completions(self, prompts, vnfs):
+            completions = []
+
+            for prompt, vnf in zip(prompts, vnfs):
+                # ---- a1 ----
+                a1 = self.model.generate(
+                    **self.tokenizer(prompt, return_tensors="pt").to(self.model.device),
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                )
+                a1_text = tokenizer.decode(a1[0], skip_special_tokens=True)
+
+                r1, test_result = get_reward_from_llm_response(a1_text, form, vnf, "traj_GRPO",{vnf:1}, 
+                                                                  k8s_client, namespace, logging=False)
+                # ---- early stop ----
+                # gpt는 0.9이상일떄 early stop으로 했는데, 나는 1.0일떄로 했는데, 이러면 erarly stop이 아닌가? 고민  필요
+                if r1 == 1.0:
+                    completions.append(a1_text)
+                    continue
+
+                # ---- RAG + a2 ----
+                status_code, server_or_message = test_result
+                inform_message, request_message, error_message =  select_request_message(status_code, form, vnf, server_or_message)
+                
+                a2 = self.model.generate(
+                    **self.tokenizer(prompt+a1_text+inform_message+request_message, return_tensors="pt").to(self.model.device),
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                )
+                a2_text = tokenizer.decode(a2[0], skip_special_tokens=True)
+
+                completions.append(a1_text + "\n<<<SECOND_TEST>>>\n" + a2_text)
+
+            return completions
+
+    # -------------------------------
+    # 6) Train
+    # -------------------------------
+    trainer = TrajectoryGRPOTrainer(
+        model=model,
+        args=args,
+        reward_funcs=trajectory_reward_func,
+        train_dataset=train_dataset,
+        processing_class=tokenizer,
+    )
+
+    with torch.autocast("cuda"):
+        trainer.train()
+
+    trainer.save_model(output_dir)
+    print(f"✅ Trajectory GRPO training finished: {output_dir}")
+
 ###############################################
 # 2. ONLINE DPO TRAINING LOOP
 ###############################################
@@ -715,6 +1017,7 @@ if __name__ == '__main__':
     argparser.add_argument('--Python', action='store_true')
     #argparser.add_argument('--RAG', action='store_true')
     argparser.add_argument('--method', default = 'dpo', choices = ['dpo', 'ppo', 'grpo', 'dpo-ppo','dpo-grpo'])
+    argparser.add_argument('--traj', action= 'store_true', help='Use trajectory RL')
     argparser.add_argument('--load-data', type=str, default=None, help='Path to the DPO dataset to load')
     argparser.add_argument('--load-model', type=str, default=None, help='Path to the model to load')
     argparser.add_argument('--test', action='store_true', help='Test with small number of MOPs for quick run')
@@ -783,17 +1086,30 @@ if __name__ == '__main__':
         )
         model_path_or_id='./tmp/ppo_qwen2.5_7b_k8s'
     if 'grpo' in argparser.method:
-        train_grpo(
-            model_path_or_id=model_path_or_id,
-            mop_data=mop_data,
-            k8s_client=(v1,apps_v1),
-            form=form,
-            output_dir='./tmp/grpo_qwen2.5_7b_k8s',
-            steps=120,
-            grad_accum=2,
-            max_new_tokens=1000,
-        )
-        model_path_or_id='./tmp/grpo_qwen2.5_7b_k8s'
+        if argparser.traj:
+            train_grpo_trajectory(
+                model_path_or_id=model_path_or_id,
+                mop_data=mop_data,
+                k8s_client=(v1,apps_v1),
+                form=form,
+                output_dir='./tmp/grpo_traj_qwen2.5_7b_k8s',
+                steps=120,
+                grad_accum=2,
+                max_new_tokens=1000,
+            )
+            model_path_or_id='./tmp/grpo_traj_qwen2.5_7b_k8s'        
+        else:
+            train_grpo(
+                model_path_or_id=model_path_or_id,
+                mop_data=mop_data,
+                k8s_client=(v1,apps_v1),
+                form=form,
+                output_dir='./tmp/grpo_qwen2.5_7b_k8s',
+                steps=120,
+                grad_accum=2,
+                max_new_tokens=1000,
+            )
+            model_path_or_id='./tmp/grpo_qwen2.5_7b_k8s'
     evaluate_llm(
         model_path_or_id=model_path_or_id,
         mop_data=mop_data,
