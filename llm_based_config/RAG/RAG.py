@@ -6,9 +6,10 @@ import chromadb
 import uuid
 import re
 import sys
+from pathlib import Path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import pickle as pkl
-
+BASE_DIR = Path(__file__).resolve().parent
 data_dir = 'evaluation_data'
 if os.getcwd().endswith('RAG'):
     import log_tf_idf
@@ -58,10 +59,11 @@ def RAG_init(db_names, embed_model='all-MiniLM-L6-v2', new = False):
         embed_model = SentenceTransformer("infly/inf-retriever-v1", trust_remote_code=True)
         embed_model.max_seq_length = 512 # embedding model get title and question, so 512 is enough.
     elif embed_model =='fine-tuned':
-        embed_model = SentenceTransformer('fine_tuned_model/all-MiniLM-L6-v2-finetuned')
+        embed_model = SentenceTransformer(str(BASE_DIR/'fine_tuned_model/all-MiniLM-L6-v2-finetuned'))
     else:
         embed_model = SentenceTransformer(embed_model)
-    if collection_name in chroma_client.list_collections():
+    existing_names = [c.name for c in chroma_client.list_collections()]
+    if collection_name in existing_names:#chroma_client.list_collections():
         if new:
             chroma_client.delete_collection(name=collection_name)
         else:

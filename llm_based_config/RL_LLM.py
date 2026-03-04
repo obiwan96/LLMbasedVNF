@@ -324,59 +324,10 @@ def render_chat_prompt(tokenizer, user_text: str) -> str:
         add_generation_prompt=True,
     )
 
-def evaluate_llm(
-    model_path_or_id: str,
-    mop_data: List[Dict[str, str]],
-    k8s_client, # Kubernetes client
-    form : str = 'Python',
-    max_new_tokens: int = 128,
-    temperature: float = 0.3,
-    top_p: float = 0.8,
-    device: Optional[str] = None,
-    ):
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    gc.collect()
-    torch.cuda.empty_cache()
-    tokenizer = AutoTokenizer.from_pretrained(model_path_or_id, cache_dir=hf_cache_path)
-    v1, apps_v1 = k8s_client
-    # decoder-only 모델의 padding 문제 방지
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(model_path_or_id, quantization_config=bnb_config,device_map="auto",cache_dir=hf_cache_path)
-    model.eval()
-
-    results: List[Dict[str, str]] = []
-    vm_num = {}
-    # 배치로 처리하고 싶으면 batch_size를 추가로 받아서 chunking하면 됨.
-    success_num=0
-    model_name = model_path_or_id.split('/')[-1]
-    for single_mop_data in mop_data:
-        prompt = single_mop_data['mop']
-        vnf = single_mop_data['vnf']
-        if vnf not in vm_num:
-            vm_num[vnf] = 1
-        else:
-            vm_num[vnf] += 1
-        lang = single_mop_data['lang']
-        vm_name = single_mop_data['vm_name']
-        enc = build_enc(tokenizer, prompt, max_input_tokens=8192)
-        answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p, prompt)
-        success, _ = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
-        if success == 1.0:
-            success_num+=1
-    print (f'## Evaluation completed. Success rate: {success_num}/{len(mop_data)}')
-    return success_num/len(mop_data)
-
-def select_request_message(test_result: int, form: str, vnf: str, server_or_message=None) -> tuple[str, str, str]:
+def select_request_message(test_result: int, form: str, vnf: str, server_or_message=None, collection=None, embed_model=None) -> tuple[str, str, str]:
     # RAG setting
     rag_threshold = 0.8
-    db_list=['RAG/stackoverflow_docs.db', 'RAG/kubernetes_docs.db']
-    if form == 'Ansible':
-        db_list.append('RAG/ansible_docs.db')
-    collection, embed_model = RAG.RAG_init(db_list, embed_model='fine-tuned', new=True)
-
+    
     request_message = ''
     inform_message = ''
     error_message = ''
@@ -454,6 +405,68 @@ def select_request_message(test_result: int, form: str, vnf: str, server_or_mess
     if request_message =='':
         request_message='Please correct your code and return the updated version by refering MOP again to configure VNF correctly.\n'
     return inform_message, request_message, error_message
+
+def evaluate_llm(
+    model_path_or_id: str,
+    mop_data: List[Dict[str, str]],
+    k8s_client, # Kubernetes client
+    form : str = 'Python',
+    retry: bool = False,
+    max_new_tokens: int = 128,
+    temperature: float = 0.3,
+    top_p: float = 0.8,
+    device: Optional[str] = None,
+    ):
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    gc.collect()
+    torch.cuda.empty_cache()
+    tokenizer = AutoTokenizer.from_pretrained(model_path_or_id, cache_dir=hf_cache_path)
+    if retry:
+        #RAG initiation
+        db_list=['RAG/stackoverflow_docs.db', 'RAG/kubernetes_docs.db']
+        if form == 'Ansible':
+            db_list.append('RAG/ansible_docs.db')
+        collection, embed_model = RAG.RAG_init(db_list, embed_model='fine-tuned', new=True)
+    v1, apps_v1 = k8s_client
+    # decoder-only 모델의 padding 문제 방지
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model = AutoModelForCausalLM.from_pretrained(model_path_or_id, quantization_config=bnb_config,device_map="auto",cache_dir=hf_cache_path)
+    model.eval()
+
+    results: List[Dict[str, str]] = []
+    vm_num = {}
+    # 배치로 처리하고 싶으면 batch_size를 추가로 받아서 chunking하면 됨.
+    success_num=0
+    model_name = model_path_or_id.split('/')[-1]
+    for single_mop_data in mop_data:
+        prompt = single_mop_data['mop']
+        vnf = single_mop_data['vnf']
+        if vnf not in vm_num:
+            vm_num[vnf] = 1
+        else:
+            vm_num[vnf] += 1
+        lang = single_mop_data['lang']
+        vm_name = single_mop_data['vm_name']
+        enc = build_enc(tokenizer, prompt, max_input_tokens=8192)
+        answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p, prompt)
+        success, test_result = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
+        if success == 1.0:
+            success_num+=1
+        elif retry: #Retry once, use RAG if need.
+            status_code, server_or_message = test_result
+            inform_message, request_message, error_message =  select_request_message(status_code, form, vnf, server_or_message, collection, embed_model)
+            prompt = prompt+answer+inform_message+error_message+request_message
+            answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p, prompt)
+            success, test_result = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
+            if success == 1.0:
+                success_num+=1
+
+    print (f'[INFO] Evaluation completed. Success rate: {success_num}/{len(mop_data)}')
+    return success_num/len(mop_data)
+
 ###############################################
 # 1. PPO TRAINING LOOP
 ###############################################
@@ -756,6 +769,11 @@ def train_grpo_trajectory(
     gc.collect()
     torch.cuda.empty_cache()
     output_dir_logs = os.path.join(output_dir, "logs_"+datetime.now().strftime('%m%d_%H%M'))
+    #RAG initiation
+    db_list=['RAG/stackoverflow_docs.db', 'RAG/kubernetes_docs.db']
+    if form == 'Ansible':
+        db_list.append('RAG/ansible_docs.db')
+    collection, embed_model = RAG.RAG_init(db_list, embed_model='fine-tuned', new=True)
 
     # -------------------------------
     # 1) Model / Tokenizer
@@ -799,7 +817,7 @@ def train_grpo_trajectory(
     train_dataset = Dataset.from_list(train_rows)
     model_name = model_path_or_id.split("/")[-1] + "_GRPO_traj"
     writer = SummaryWriter(output_dir_logs)
-    _cache = {"step": None, "raw": [], "shaped": []}
+    _cache = {"step": None, "raw": [], "shaped": [], "a2_used_ratio": []}
 
     # -------------------------------
     # 3) Trajectory reward function
@@ -811,13 +829,14 @@ def train_grpo_trajectory(
         """
         rewards = []
         shaped = []
-
+        a2_used_count = 0
         for prompt, comp, v in zip(prompts, completions, vnf):
 
             # ---- split a1 / a2 ----
             # 규칙: <<<SECOND_TEST>>> 토큰 기준
             if "<<<SECOND_TEST>>>" in comp:
                 a1, a2 = comp.split("<<<SECOND_TEST>>>", 1)
+                a2_used_count += 1
             else:
                 a1, a2 = comp, None
 
@@ -844,12 +863,15 @@ def train_grpo_trajectory(
                 if _cache["raw"]:                    
                     writer.add_scalar("custom_reward/raw_mean", sum(_cache["raw"]) / len(_cache["raw"]), _cache["step"])
                     writer.add_scalar("custom_reward/shaped_mean", sum(_cache["shaped"]) / len(_cache["shaped"]), _cache["step"])
+                    writer.add_scalar("custom_reward/a2_usage_ratio", sum(_cache["a2_used_ratio"]) / len(_cache["raw"]), _cache["step"])
                 _cache["raw"].clear()
                 _cache["shaped"].clear()
+                _cache["a2_used_ratio"].clear()
 
             _cache["step"] = step
             _cache["raw"].extend(rewards)
             _cache["shaped"].extend(shaped)
+            _cache["a2_used_ratio"].append(a2_used_count / len(completions))
         assert all(math.isfinite(r) for r in shaped_t)
 
         return [float(x) for x in shaped_t.detach().cpu().tolist()]
@@ -902,17 +924,16 @@ def train_grpo_trajectory(
                 r1, test_result = get_reward_from_llm_response(a1_text, form, vnf, "traj_GRPO",{vnf:1}, 
                                                                   k8s_client, namespace, logging=False)
                 # ---- early stop ----
-                # gpt는 0.9이상일떄 early stop으로 했는데, 나는 1.0일떄로 했는데, 이러면 erarly stop이 아닌가? 고민  필요
                 if r1 == 1.0:
                     completions.append(a1_text)
                     continue
 
                 # ---- RAG + a2 ----
                 status_code, server_or_message = test_result
-                inform_message, request_message, error_message =  select_request_message(status_code, form, vnf, server_or_message)
+                inform_message, request_message, error_message =  select_request_message(status_code, form, vnf, server_or_message, collection, embed_model)
                 
                 a2 = self.model.generate(
-                    **self.tokenizer(prompt+a1_text+inform_message+request_message, return_tensors="pt").to(self.model.device),
+                    **self.tokenizer(prompt+a1_text+inform_message+error_message+request_message, return_tensors="pt").to(self.model.device),
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                     top_p=top_p,
@@ -1015,7 +1036,7 @@ if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
     argparser.add_argument('--Ansible', action='store_true')
     argparser.add_argument('--Python', action='store_true')
-    #argparser.add_argument('--RAG', action='store_true')
+    argparser.add_argument('--RAG', action='store_true')
     argparser.add_argument('--method', default = 'dpo', choices = ['dpo', 'ppo', 'grpo', 'dpo-ppo','dpo-grpo'])
     argparser.add_argument('--traj', action= 'store_true', help='Use trajectory RL')
     argparser.add_argument('--load-data', type=str, default=None, help='Path to the DPO dataset to load')
@@ -1036,10 +1057,12 @@ if __name__ == '__main__':
         model_path_or_id=argparser.load_model
     else:
         model_path_or_id='Qwen/Qwen2.5-7B-Instruct'
+    original_success_rate = None
     if argparser.evaluate_first:
-        evaluate_llm(
+        original_success_rate = evaluate_llm(
             model_path_or_id=model_path_or_id,
             mop_data=mop_data,
+            retry=argparser.RAG,
             k8s_client=(v1,apps_v1),
             form=form,
             max_new_tokens=1000,
@@ -1064,7 +1087,7 @@ if __name__ == '__main__':
             input_io_pairs = input_io_pairs + new_input_io_pairs if current_data_num > 0 else new_input_io_pairs
             current_data_num = len(input_io_pairs)
         input_io_pairs = input_io_pairs[:dpo_data_num]
-        print (f'Total {len(input_io_pairs)} IO pairs ready for DPO training.')
+        print (f'[INFO] Total {len(input_io_pairs)} IO pairs ready for DPO training.')
         with open('tmp/dpo_dataset.pkl' , 'wb') as f:
             import pickle
             pickle.dump(input_io_pairs, f)
@@ -1110,11 +1133,14 @@ if __name__ == '__main__':
                 max_new_tokens=1000,
             )
             model_path_or_id='./tmp/grpo_qwen2.5_7b_k8s'
-    evaluate_llm(
+    new_success_rate = evaluate_llm(
         model_path_or_id=model_path_or_id,
         mop_data=mop_data,
+        retry=argparser.RAG,
         k8s_client=(v1,apps_v1),
         form=form,
         max_new_tokens=1000,
     )
+    if original_success_rate is not None:
+        print (f'[INFO] Success rate improved from {original_success_rate:.2%} to {new_success_rate:.2%} after training.')
  
