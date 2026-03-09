@@ -12,6 +12,8 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import logging
 import random
 import gc
+import re
+import copy
 import math
 from datetime import datetime
 
@@ -130,8 +132,11 @@ def read_mop_file(file_path: str, test:bool = False) -> list[str]:
         mop_data.append(single_mop)
     return mop_data        
 
-def get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p, prompt, do_sample=False) -> str:
+def get_response_from_llm(model, tokenizer, max_new_tokens, temperature, top_p, prompt, do_sample=False) -> str:
     #assert tokenizer.name_or_path == model.config.name_or_path
+    enc = build_enc(tokenizer, prompt, max_input_tokens=8192)
+    first_device = next(model.parameters()).device
+    enc = {k: v.to(first_device) for k, v in enc.items()}
     attention_mask = torch.ones_like(enc["input_ids"])
     device = "cuda" if torch.cuda.is_available() else "cpu"
     with torch.no_grad():
@@ -173,6 +178,7 @@ def get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, to
 
 def get_reward_from_llm_response(answer: str, form: str, vnf: str, model_name: str, vm_num: dict, k8s_client, namespace: str, logging:bool=False) -> float:
     logging_file = f'tmp/rl_llm_response_log.txt'
+    answer = answer.split("Human:")[0].strip()
     second_message = None
     if logging:        
         with open(logging_file, 'a') as f:
@@ -283,14 +289,11 @@ def generate_io_pairs(
                 vm_num[vnf] += 1
             lang = single_mop_data['lang']
             vm_name = single_mop_data['vm_name']
-            enc = build_enc(tokenizer, prompt, max_input_tokens=8192)
-            first_device = next(model.parameters()).device
-            enc = {k: v.to(first_device) for k, v in enc.items()}
             print ('\n'+'#'*50)
             print (f'## Generating IO pairs for VNF: {vnf}, Language: {lang}, VM: {vm_name}, MOP:')
             #print(prompt)
             #print('\n ## Now here is answer')
-            answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p, prompt, do_sample=True)
+            answer = get_response_from_llm(model, tokenizer, max_new_tokens, temperature, top_p, prompt, do_sample=True)
             #print(answer)
 
             # Test in NDT
@@ -300,7 +303,7 @@ def generate_io_pairs(
                 print('## Good configuration example generated successfully.')
                 bad_config_answer = None
                 for try_num in range(5):  # 최대 5번까지 시도
-                    answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, min(0.7, temperature+0.1), top_p, prompt, do_sample=True)
+                    answer = get_response_from_llm(model, tokenizer, max_new_tokens, min(0.9, temperature+0.1*(try_num+1)), top_p, prompt, do_sample=True)
                     success, _ = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
                     if success != 1.0:
                         bad_config_answer = answer
@@ -450,8 +453,7 @@ def evaluate_llm(
             vm_num[vnf] += 1
         lang = single_mop_data['lang']
         vm_name = single_mop_data['vm_name']
-        enc = build_enc(tokenizer, prompt, max_input_tokens=8192)
-        answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p, prompt)
+        answer = get_response_from_llm(model, tokenizer, max_new_tokens, temperature, top_p, prompt)
         success, test_result = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
         if success == 1.0:
             success_num+=1
@@ -459,7 +461,7 @@ def evaluate_llm(
             status_code, server_or_message = test_result
             inform_message, request_message, error_message =  select_request_message(status_code, form, vnf, server_or_message, collection, embed_model)
             prompt = prompt+answer+inform_message+error_message+request_message
-            answer = get_response_from_llm(model, tokenizer, enc, max_new_tokens, temperature, top_p, prompt)
+            answer = get_response_from_llm(model, tokenizer, max_new_tokens, temperature, top_p, prompt)
             success, test_result = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
             if success == 1.0:
                 success_num+=1
@@ -763,7 +765,7 @@ def train_grpo_trajectory(
     num_generations: int = 8,
     num_prompts_per_step: int = 4,
     scale_rewards: str = "group",
-    log_completions: bool = False,
+    log_completions: bool = True,
     num_completions_to_print: int = 0,
 ):
     gc.collect()
@@ -796,12 +798,20 @@ def train_grpo_trajectory(
     )
     model = prepare_model_for_kbit_training(model)
     model = get_peft_model(model, lora_config, autocast_adapter_dtype=False)
+    model.to(torch.bfloat16)
+    # 4. 그레디언트 체크포인팅 및 학습 설정
+    model.gradient_checkpointing_enable()
+    model.enable_input_require_grads()
     model.print_trainable_parameters()
-    for name, p in model.named_parameters():
-        if "lora_" in name and p.dtype == torch.float32:
-            p.data = p.data.to(torch.bfloat16)
+    '''for name, p in model.named_parameters():
+        if "lora_" in name:
+            p.requires_grad = True
+            if p.dtype == torch.float32:
+                p.to(torch.bfloat16)            
+            #p.data = p.data.to(torch.bfloat16)
     if hasattr(model, "lm_head") and model.lm_head is not None:
-        model.lm_head = model.lm_head.to(torch.bfloat16)
+        model.lm_head.to(torch.bfloat16)
+        #model.lm_head = model.lm_head.to(torch.bfloat16)'''
     tokenizer = AutoTokenizer.from_pretrained(model_path_or_id, cache_dir=hf_cache_path)
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
@@ -809,19 +819,25 @@ def train_grpo_trajectory(
     # -------------------------------
     # 2) Dataset (prompt only)
     # -------------------------------
+    # Put VNF info in prompt so that use inside the _generate_completions()
+    def make_prompt(tokenizer, mop, vnf):
+        base = render_chat_prompt(tokenizer, mop)
+        return f"<<VNF:{vnf}>>\n{base}"
     train_rows = [{
-        "prompt": render_chat_prompt(tokenizer, x["mop"]),
+        #"prompt": render_chat_prompt(tokenizer, x["mop"]),
+        "prompt": make_prompt(tokenizer, x["mop"], x["vnf"]),
         "vnf": x["vnf"],
     } for x in mop_data]
 
     train_dataset = Dataset.from_list(train_rows)
     model_name = model_path_or_id.split("/")[-1] + "_GRPO_traj"
     writer = SummaryWriter(output_dir_logs)
-    _cache = {"step": None, "raw": [], "shaped": [], "a2_used_ratio": []}
+    _cache = {"step": None, "raw": [], "shaped": [], "a2_used_usage": []}
 
     # -------------------------------
     # 3) Trajectory reward function
     # -------------------------------
+    logging_file = f'tmp/rl_llm_response_trajectory_a2_log.txt'
     def trajectory_reward_func(prompts, completions, vnf, trainer_state=None, **kwargs):
         """
         completions: List[str]  # each is (a1) or (a1 + a2)
@@ -831,14 +847,15 @@ def train_grpo_trajectory(
         shaped = []
         a2_used_count = 0
         for prompt, comp, v in zip(prompts, completions, vnf):
-
             # ---- split a1 / a2 ----
             # 규칙: <<<SECOND_TEST>>> 토큰 기준
             if "<<<SECOND_TEST>>>" in comp:
                 a1, a2 = comp.split("<<<SECOND_TEST>>>", 1)
+                #print(f"## VNF: {v}, #completions-a1: {len(a1)}, a2: {len(a2)}")
                 a2_used_count += 1
             else:
                 a1, a2 = comp, None
+                #print(f"## VNF: {v}, #completions: {len(comp)}")
 
             # ---- r1 ----
             r1, _ = get_reward_from_llm_response(a1, form, v, model_name,{v: 1}, k8s_client, namespace, logging=False)
@@ -850,7 +867,6 @@ def train_grpo_trajectory(
             if a2 is not None:
                 r2, _ = get_reward_from_llm_response(a2, form, v, model_name,{v: 1}, k8s_client, namespace, logging=False)
                 r2 -= cost_reward  # RAG 비용 패널티
-
             total_reward = r1 + gamma * r2
             rewards.append(total_reward)
             shaped.append(5.0*float(shape_reward(total_reward)))
@@ -863,15 +879,15 @@ def train_grpo_trajectory(
                 if _cache["raw"]:                    
                     writer.add_scalar("custom_reward/raw_mean", sum(_cache["raw"]) / len(_cache["raw"]), _cache["step"])
                     writer.add_scalar("custom_reward/shaped_mean", sum(_cache["shaped"]) / len(_cache["shaped"]), _cache["step"])
-                    writer.add_scalar("custom_reward/a2_usage_ratio", sum(_cache["a2_used_ratio"]) / len(_cache["raw"]), _cache["step"])
+                    writer.add_scalar("custom_reward/a2_usage_ratio", sum(_cache["a2_used_usage"]) / len(_cache["a2_used_usage"]), _cache["step"])
                 _cache["raw"].clear()
                 _cache["shaped"].clear()
-                _cache["a2_used_ratio"].clear()
+                _cache["a2_used_usage"].clear()
 
             _cache["step"] = step
             _cache["raw"].extend(rewards)
             _cache["shaped"].extend(shaped)
-            _cache["a2_used_ratio"].append(a2_used_count / len(completions))
+            _cache["a2_used_usage"].append(a2_used_count/len(completions))
         assert all(math.isfinite(r) for r in shaped_t)
 
         return [float(x) for x in shaped_t.detach().cpu().tolist()]
@@ -889,10 +905,10 @@ def train_grpo_trajectory(
         report_to=["tensorboard"],
         logging_dir=output_dir_logs,
 
-        max_prompt_length=8192+max_new_tokens*2, # to make a2, we should put a1 and rag result in prompt
+        max_prompt_length=8192,#+max_new_tokens*2, # to make a2, we should put a1 and rag result in prompt
         generation_batch_size=num_generations * num_prompts_per_step,
         num_generations=num_generations,
-        max_completion_length=max_new_tokens * 2,  # a1 + a2 대비
+        max_completion_length=max_new_tokens,# * 2,  # a1 + a2 대비
         temperature=temperature,
         top_p=top_p,
 
@@ -908,41 +924,101 @@ def train_grpo_trajectory(
     # 5) Custom rollout via Trainer
     # -------------------------------
     class TrajectoryGRPOTrainer(GRPOTrainer):
-        def _generate_completions(self, prompts, vnfs):
-            completions = []
-
-            for prompt, vnf in zip(prompts, vnfs):
-                # ---- a1 ----
-                a1 = self.model.generate(
-                    **self.tokenizer(prompt, return_tensors="pt").to(self.model.device),
-                    max_new_tokens=max_new_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                )
-                a1_text = tokenizer.decode(a1[0], skip_special_tokens=True)
-
-                r1, test_result = get_reward_from_llm_response(a1_text, form, vnf, "traj_GRPO",{vnf:1}, 
-                                                                  k8s_client, namespace, logging=False)
-                # ---- early stop ----
-                if r1 == 1.0:
-                    completions.append(a1_text)
-                    continue
-
-                # ---- RAG + a2 ----
-                status_code, server_or_message = test_result
-                inform_message, request_message, error_message =  select_request_message(status_code, form, vnf, server_or_message, collection, embed_model)
+        def _generate(self, prompts: list[str], images: Optional[list] = None):
+            device = self.accelerator.device
+            mode = "train" if self.model.training else "eval"
+            
+            # 1. 기초 정보 수집 및 a1 생성 준비
+            # _generate_single_turn은 기본적으로 모델의 생성을 담당합니다.
+            # 여기서는 1차 생성을 먼저 수행합니다.
+            prompt_ids, a1_completion_ids, _, forward_kwargs = self._generate_single_turn(prompts, images)
+            
+            combined_completion_ids = []
+            
+            # 2. 개별 샘플별로 검증 및 필요시 a2(RAG) 생성
+            for i in range(len(prompts)):
+                p_ids = prompt_ids[i]
+                c1_ids = a1_completion_ids[i]
                 
-                a2 = self.model.generate(
-                    **self.tokenizer(prompt+a1_text+inform_message+error_message+request_message, return_tensors="pt").to(self.model.device),
-                    max_new_tokens=max_new_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
+                # 토큰을 텍스트로 복구하여 검증 (r1 계산)
+                a1_text = self.processing_class.decode(c1_ids, skip_special_tokens=True)
+                prompt_text = self.processing_class.decode(p_ids, skip_special_tokens=True)
+                
+                # VNF 정보 추출 (메타데이터 활용)
+                vnf_match = re.search(r"<<VNF:(.*?)>>", prompt_text)
+                vnf = vnf_match.group(1) if vnf_match else None
+                clean_prompt = re.sub(r"<<VNF:.*?>>\n", "", prompt_text)
+                #print("[DEBUG] VNF:", vnf)
+                
+                # r1 보상 계산 및 테스트 결과 수집
+                # 외부 함수: get_reward_from_llm_response, select_request_message 등 사용
+                r1, test_result = get_reward_from_llm_response(
+                    a1_text, form, vnf, model_name, {vnf:1}, k8s_client, namespace, logging=True
                 )
-                a2_text = tokenizer.decode(a2[0], skip_special_tokens=True)
+                
+                if r1 == 1.0:
+                    # 1차 성공 시 a1 그대로 사용
+                    combined_completion_ids.append(c1_ids)
+                else:
+                    # 1차 실패 시 RAG 수행 및 2차 생성
+                    status_code, server_or_message = test_result
+                    inform_msg, req_msg, err_msg = select_request_message(
+                        status_code, form, vnf, server_or_message, 
+                        collection, embed_model
+                    )
+                    
+                    # 2차 프롬프트 구성: [Original Prompt] + [a1] + [RAG Context]
+                    rag_prompt = clean_prompt + a1_text + "\n" + inform_msg + err_msg + req_msg
+                    self.model.eval()
+                    self.model.config.use_cache = True
+                    old_use_cache = self.model.config.use_cache
+                    rag_inputs = self.processing_class(rag_prompt, return_tensors="pt", padding=True).to(device)
+                    generation_config = copy.deepcopy(self.generation_config)
+                    generation_config.max_prompt_length = 8192+max_new_tokens*2
+                    generation_config.max_completion_length = max_new_tokens*2
+                    generation_config.repetition_penalty = 1.1
+                    # a2 생성 (Gradient 계산 없이 수행)
+                    with torch.no_grad():
+                        # unwrapped_model을 사용하여 순수 generation 수행
+                        a2_output = self.model.generate(
+                            **rag_inputs, 
+                            generation_config=generation_config,
+                            do_sample=True
+                        )
+                    self.model.config.use_cache = old_use_cache
+                    self.model.train()
+                    
+                    # a2의 생성된 토큰 부분만 추출
+                    a2_ids = a2_output[0, rag_inputs["input_ids"].shape[1]:].tolist()
+                    
+                    # 특수 구분자 추가 (학습 시 모델이 2차 시도임을 인지하게 함)
+                    sep_ids = self.processing_class.encode("\n<<<SECOND_TEST>>>\n", add_special_tokens=False)
+                    
+                    # 궤적 결합: [a1] + [SEP] + [a2]
+                    combined_ids = c1_ids + sep_ids + a2_ids
+                    combined_completion_ids.append(combined_ids)
+                    a2_text = self.processing_class.decode(a2_ids, skip_special_tokens=True)
+                    with open(logging_file, 'a') as f:
+                        f.write(f" *** [New Trial] VNF: {vnf}, Model: {model_name} *** \n")
+                        f.write(f" --- Prompt:\n{clean_prompt}\n")
+                        f.write(f" --- First response:\n{a1_text}\n")
+                        f.write(f" *-*- RAG Context:\n{inform_msg}\n{err_msg}\n{req_msg}\n")
+                        f.write(f" ##- Second response:\n{a2_text}\n\n")
 
-                completions.append(a1_text + "\n<<<SECOND_TEST>>>\n" + a2_text)
+            # 3. 메트릭 로깅 및 데이터 정리 (원본 _generate 로직 유지)
+            completion_lengths = torch.tensor([len(ids) for ids in combined_completion_ids], device=device)
+            agg_completion_lengths = self.accelerator.gather(completion_lengths)
+            total_completion_tokens = agg_completion_lengths.sum()
 
-            return completions
+            if mode == "train":
+                prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
+                self.state.num_input_tokens_seen += (self.accelerator.gather(prompt_lengths).sum() + total_completion_tokens).item()
+            
+            self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
+            
+            # 최종 반환: logprobs는 None으로 보내면 _generate_and_score_completions에서 
+            # 결합된 시퀀스 전체에 대해 다시 한 번에 계산합니다 (이것이 역전파 핵심).
+            return prompt_ids, combined_completion_ids, total_completion_tokens, None, forward_kwargs
 
     # -------------------------------
     # 6) Train
@@ -1109,6 +1185,14 @@ if __name__ == '__main__':
         )
         model_path_or_id='./tmp/ppo_qwen2.5_7b_k8s'
     if 'grpo' in argparser.method:
+        if argparser.test:
+            steps=2
+            num_generations=4
+            num_prompts_per_step=2
+        else:
+            steps=120
+            num_generations=8
+            num_prompts_per_step=4
         if argparser.traj:
             train_grpo_trajectory(
                 model_path_or_id=model_path_or_id,
@@ -1116,7 +1200,9 @@ if __name__ == '__main__':
                 k8s_client=(v1,apps_v1),
                 form=form,
                 output_dir='./tmp/grpo_traj_qwen2.5_7b_k8s',
-                steps=120,
+                steps=steps,
+                num_generations=num_generations,
+                num_prompts_per_step=num_prompts_per_step, 
                 grad_accum=2,
                 max_new_tokens=1000,
             )
@@ -1128,7 +1214,9 @@ if __name__ == '__main__':
                 k8s_client=(v1,apps_v1),
                 form=form,
                 output_dir='./tmp/grpo_qwen2.5_7b_k8s',
-                steps=120,
+                steps=steps,
+                num_generations=num_generations,
+                num_prompts_per_step=num_prompts_per_step,
                 grad_accum=2,
                 max_new_tokens=1000,
             )
