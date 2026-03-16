@@ -10,6 +10,7 @@ test*
 already_done.py
 mop/
 Example_Code/
+data_generating/data_v3/
 Good_Example/
 finetuned_llms/
 Bad_Example/

@@ -95,7 +95,9 @@ def read_mop_file(file_path: str, test:bool = False) -> list[str]:
     # Just be simple
     if test:
         mop_len = len(mop_list)
-        mop_list = mop_list[:int(mop_len/8)]  # Test with 1/8 MOPs
+        #mop_list = mop_list[:int(mop_len/8)]  # Test with 1/8 MOPs
+        mop_list = random.sample(mop_list, len(mop_list)) # Shuffle the list
+        mop_list = mop_list[:5] # Test with 5 MOPs
 
     mop_data = []
     for mop_file in mop_list:
@@ -927,8 +929,11 @@ def train_grpo_trajectory(
         def _generate(self, prompts: list[str], images: Optional[list] = None):
             device = self.accelerator.device
             mode = "train" if self.model.training else "eval"
+
+            ##### Print token length. need to be deleted after test.
+            first_lengths = [len(self.processing_class.encode(p)) for p in prompts]
+            print(f"\n[Token Check] 1st Prompt - Max: {max(first_lengths)}, Avg: {sum(first_lengths)/len(first_lengths):.1f}")
             
-            # 1. 기초 정보 수집 및 a1 생성 준비
             # _generate_single_turn은 기본적으로 모델의 생성을 담당합니다.
             # 여기서는 1차 생성을 먼저 수행합니다.
             prompt_ids, a1_completion_ids, _, forward_kwargs = self._generate_single_turn(prompts, images)
@@ -969,6 +974,13 @@ def train_grpo_trajectory(
                     
                     # 2차 프롬프트 구성: [Original Prompt] + [a1] + [RAG Context]
                     rag_prompt = clean_prompt + a1_text + "\n" + inform_msg + err_msg + req_msg
+
+                    ##### Print token length. need to be deleted after test. 22
+                    rag_token_count = len(self.processing_class.encode(rag_prompt))
+                    print(f"  -> [Sample {i}] 2nd (RAG) Prompt Tokens: {rag_token_count}")
+                    if rag_token_count > self.args.max_prompt_length:
+                        print(f"     ⚠️ WARNING: Prompt length ({rag_token_count}) exceeds max_prompt_length ({self.args.max_prompt_length})!")
+
                     self.model.eval()
                     self.model.config.use_cache = True
                     old_use_cache = self.model.config.use_cache
@@ -1121,7 +1133,8 @@ if __name__ == '__main__':
     argparser.add_argument('--evaluate-first', action='store_true', help='Evaluate the base model before training')
 
     argparser=argparser.parse_args()
-    mop_file_path = '../mop/Intergrated/'
+    #mop_file_path = '../mop/Intergrated/'
+    mop_file_path = '../data_generating/data_v3/'
     system_name='Kubernetes'
     config.load_kube_config()
     v1 = client.CoreV1Api()
