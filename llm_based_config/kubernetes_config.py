@@ -120,7 +120,7 @@ def return_error_logs(logs):
             error_logs.append(log)
     return error_logs
 
-def test_creation_ansible_K8S(llm_response, vnf, model, vm_num, v1, timeout=300):
+def test_creation_ansible_K8S(llm_response, vnf, model, vm_num, v1, timeout=300, use_whole_code=False):
     config_file_path = 'K8S_Conf/'
     if not os.path.exists(config_file_path):
         os.makedirs(config_file_path)
@@ -135,7 +135,8 @@ def test_creation_ansible_K8S(llm_response, vnf, model, vm_num, v1, timeout=300)
         #print('parsing fail')
         return 1, None
     if not yml_code:
-        if model != 'o3-mini':
+        if not use_whole_code:
+        #if model != 'o3-mini':
             return 1, None
         else:
             # o3-mini seems not using ``` format!
@@ -222,7 +223,7 @@ def test_creation_ansible_K8S(llm_response, vnf, model, vm_num, v1, timeout=300)
         #print('VM creation failed')
         return 22, e
     
-def test_creation_python_K8S(llm_response, vnf, model, vm_num, trial, v1, namespace, timeout=300):
+def test_creation_python_K8S(llm_response, vnf, model, vm_num, trial, v1, namespace, timeout=300, use_whole_response=False):
     config_file_path = 'K8S_Conf/'
     if not os.path.exists(config_file_path):
         os.makedirs(config_file_path)
@@ -237,7 +238,8 @@ def test_creation_python_K8S(llm_response, vnf, model, vm_num, trial, v1, namesp
         #print('parsing fail')
         return 1, None
     if not python_code:
-        if model != 'o3-mini':
+        #if model != 'o3-mini':
+        if not use_whole_response:
             return 1, None
         else:
             # o3-mini seems not using ``` format!
@@ -350,6 +352,7 @@ def run_config(v1, pod_name, namespace, input, output, exactly=False):
     return response
 
 def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
+    # 0, 2, 30, 31, 32, 33
     exit_code_dict = {1 : 'General error, likes script failure, invalid arguments, etc.', 
                       126: 'Command found but not executable, permission problem or command is not executable',
                       127: 'Command not found, invalid command or not in PATH',
