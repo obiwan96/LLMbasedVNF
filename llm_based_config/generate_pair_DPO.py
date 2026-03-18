@@ -2,7 +2,7 @@ import gc
 import re
 import random
 from typing import List, Dict, Optional, Tuple
-import json
+import json, os
 import argparse
 from kubernetes import client, config
 from langchain_community.llms import Ollama
@@ -409,6 +409,36 @@ def print_word_diff(text1, text2):
         elif tag == 'insert':
             print(f"➕ 추가: '{b_part}'")
 
+
+def save_cot_data(cot_data_list, filename):
+    """
+    Saves CoT data to a JSON file.
+    If existing data is present, reads it and appends the new data.
+    
+    :param cot_data_list: List of CoT data to add (e.g., [{"prompt": "...", "chain_of_thought": "..."}, ...])
+    :param filename: Path to the JSON file to save
+    """
+    # Read existing data (initialize as empty list if file does not exist)
+    if os.path.exists(filename):
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                existing_data = json.load(f)
+        except json.JSONDecodeError:
+            print(f"Warning: {filename} file is corrupted or invalid JSON. Creating a new one.")
+            existing_data = []
+    else:
+        existing_data = []
+    
+    # Append new data
+    existing_data.extend(cot_data_list)
+    
+    # Save to JSON file
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(existing_data, f, indent=4, ensure_ascii=False)
+    
+    print(f"CoT data saved to {filename}. Total {len(existing_data)} items.")
+
+
 # =========================
 # Main function
 # =========================
@@ -489,7 +519,7 @@ def generate_cot_dpo_pairs(
     weak_vs_strong_pairs: List[Dict[str, str]] = []
     wrong_vs_correct_pairs: List[Dict[str, str]] = []
     verified_vs_unverified_pairs: List[Dict[str, str]] = []
-
+    success_num=0
     for step_num in range(steps):
         print(f"\n{'=' * 80}")
         print(f"## Global step: {step_num + 1}/{steps}")
@@ -517,7 +547,6 @@ def generate_cot_dpo_pairs(
                 generation_styles = generation_styles[:samples_per_prompt]
             elif samples_per_prompt > len(generation_styles):
                 generation_styles += random.choices(["strong", "verified", "direct"], k=samples_per_prompt - len(generation_styles))
-            before_answer = ''
             for sample_idx, style in enumerate(generation_styles):
                 cur_temp = min(0.95, temperature + 0.05 * sample_idx)
 
@@ -566,7 +595,7 @@ def generate_cot_dpo_pairs(
             strong_formatted = format_cot_answer(strong_reasoning, strong_final)
 
             print("## Best passing candidate selected.")
-
+            success_num+=1
             # =========================================================
             # A. direct answer vs strong CoT
             # =========================================================
@@ -640,6 +669,16 @@ def generate_cot_dpo_pairs(
                             "rejected": rejected_unverified,
                             "category": "verified_vs_unverified",
                         })
+            if idx%20==19:
+                print(f"\n{idx+1}th work end. total {success_num} camdidates created.")
+                category_map = {
+                    "direct_vs_strong": direct_vs_strong_pairs,
+                    "weak_vs_strong": weak_vs_strong_pairs,
+                    "wrong_vs_correct": wrong_vs_correct_pairs,
+                    "verified_vs_unverified": verified_vs_unverified_pairs,
+                }
+                with open(f'tmp/cot_dpo_candidates_{system_name}_{form}.json', 'w') as f:
+                    json.dump(category_map, f, indent=2)
     # =========================================================
     # Ratio balancing
     # =========================================================
@@ -716,5 +755,4 @@ if __name__ == "__main__":
         namespace=namespace,
         form=form,
         max_new_tokens=800)
-    with open(f'tmp/cot_dpo_pairs_{system_name}_{form}.json', 'w') as f:
-        json.dump(generated_pairs, f, indent=2)
+    save_cot_data(generated_pairs, f'cot_dpo_pairs_{system_name}_{form}.json')

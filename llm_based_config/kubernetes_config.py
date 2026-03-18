@@ -26,7 +26,6 @@ errorcode_dict={
     21: 'Pod fall in error state. State information is out',
     22: 'Exception occur in my code',
     23: 'Ansible failed. (status, output) will be out',
-    30: 'Error occur while configure VNF. Error logs will be out',
     31: "Pod name doesn't exist in Namespace",
     32: "container exit, need to add 'sleep infinity'. container name may out",
     33: 'container failed. (continer_name, error_code, error_message) will be out',
@@ -34,6 +33,13 @@ errorcode_dict={
     42: "the answer to life the universe and everything",
     43: 'Error while searching Pod',
     51: "function didn't return True. Here is the output. \n",
+    # 30: 'Error occur while configure VNF. Error logs will be out', was too general. From now on, devide 30 code to 6x code.
+    60: 'Kubelet connectivity timeout while running pod exec command (10250).',
+    61: 'Kubelet connectivity timeout while reading pod logs (10250).',
+    62: 'Kubernetes exec API failed for reasons other than timeout.',
+    63: 'Kubernetes pod log API failed for reasons other than timeout.',
+    64: 'Error-like pattern was detected in pod logs during configuration.',
+    69: 'Unclassified configuration-path exception occurred.',
     90: 'Running Timeout. stdout may out',
     91: 'Container Ready Timeout'
 }
@@ -98,7 +104,7 @@ def get_pod_logs(v1, pod_name, namespace= namespace, return_error=False):
     
     except ApiException as e:
         error_message = f"Exception when reading logs in pod {pod_name}: {e}"
-        print(error_message)
+        #print(error_message)
         if return_error:
             return "", error_message
         return ""
@@ -117,6 +123,34 @@ def check_log_error(logs):
     if  'Err' in logs:
         return logs.find('Err')
     return None
+
+def classify_k8s_config_error(error_text, source='unknown'):
+    normalized = str(error_text or '').lower()
+
+    if source == 'log_pattern':
+        return 64
+
+    if 'containerlogs' in normalized:
+        if 'i/o timeout' in normalized or 'dial tcp' in normalized:
+            return 61
+        return 63
+
+    if '/exec/' in normalized or 'error sending request' in normalized:
+        if 'i/o timeout' in normalized or 'dial tcp' in normalized:
+            return 60
+        return 62
+
+    if 'i/o timeout' in normalized or 'dial tcp' in normalized:
+        return 60
+
+    if source == 'log_api':
+        return 63
+    if source == 'exec':
+        return 62
+    return 69
+
+def is_k8s_config_error_code(error_code):
+    return error_code in [30, 60, 61, 62, 63, 64, 69]
 
 def return_error_logs(logs):
     logs = logs.split('\n')
@@ -358,7 +392,7 @@ def run_config(v1, pod_name, namespace, input, output, exactly=False):
     return response
 
 def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
-    # 0, 2, 30, 31, 32, 33
+    # 0, 2, 31, 32, 33, 60~69
     exit_code_dict = {1 : 'General error, likes script failure, invalid arguments, etc.', 
                       126: 'Command found but not executable, permission problem or command is not executable',
                       127: 'Command not found, invalid command or not in PATH',
@@ -397,7 +431,7 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
         logs = get_pod_logs(v1, pod_name, namespace)
         error_index = check_log_error(logs)
         if error_index is not None:
-            return 30, logs[max(error_index-5, 0):]
+            return 64, logs[max(error_index-5, 0):]
         if time.time() - start_time > wait_time:
             # error or exit did not occur while wait_time
             break
@@ -418,13 +452,16 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
             logs, log_read_error = get_pod_logs(v1, pod_name, namespace, return_error=True)
             error_index = check_log_error(logs)
             if error_index is not None:
-                return 30,  str(result.stderr) +  '\n' + logs[max(error_index-5, 0):]
+                return 64,  str(result.stderr) +  '\n' + logs[max(error_index-5, 0):]
             if log_read_error:
-                return 30, str(result.stderr) + '\n' + log_read_error
-            return 30, str(result.stderr) + '\n' + logs[-5:]
+                merged_error = str(result.stderr) + '\n' + log_read_error
+                return classify_k8s_config_error(merged_error, source='log_api'), merged_error
+            exec_error = str(result.stderr) + '\n' + logs[-5:]
+            return classify_k8s_config_error(exec_error, source='exec'), exec_error
 
     except Exception as e:
-        return 30, str(e)
+        error_text = str(e)
+        return classify_k8s_config_error(error_text), error_text
 
     if vnf == 'firewall':
         input_operation , output_operation, exactly = 'sudo iptables -L -v -n', 'DROP', False

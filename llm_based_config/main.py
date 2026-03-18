@@ -330,7 +330,7 @@ if __name__ == '__main__':
                             start_time = time.time()
                             inform_message= ''
                             request_message=''
-                            assert(second_test_result in [2, 30, 31, 32, 33])
+                            assert(second_test_result [2, 31, 32, 33] or is_k8s_config_error_code(second_test_result))
                             if second_test_result == 2:
                                 second_test_result = second_message
                             elif second_test_result == 31:
@@ -341,7 +341,7 @@ if __name__ == '__main__':
                                 else:
                                     second_message = "After I run your code, the container exited."                             
                                 request_message = "Please modify your code by adding 'sleep infinity' so that the container does not turn off. Please show me the updated version.\n"                        
-                            elif second_test_result == 30:
+                            elif is_k8s_config_error_code(second_test_result):
                                 inform_message = 'While configure VNF with your code, I got this error. \n'
                                 if argparser.log_generating:
                                     bad_log_example.append(second_message)
@@ -354,7 +354,7 @@ if __name__ == '__main__':
                             with open(logging_file, 'a') as f:
                                 f.write('Config test failled. Results:\n')
                                 f.write(second_message+'\n')
-                            if  argparser.RAG and second_test_result in [30, 33]:
+                            if  argparser.RAG and (is_k8s_config_error_code(second_test_result) or second_test_result == 33):
                                 # VNF configuration related docs are not crawled yet. only StackOverflow
                                 rag_start_time = time.time()                           
                                 retrieved_docs=RAG.RAG_search(second_message, collection, embed_model, logging_, vnf_name=vnf, use_tf_idf = argparser.RAG_tf_idf)

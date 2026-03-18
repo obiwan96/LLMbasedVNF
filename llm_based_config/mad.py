@@ -208,7 +208,7 @@ def multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,sy
                             inform_message= ''
                             second_message = f"After I run your code, the container '{second_message}' exited."                                 
                             request_message = "Please modify your code by adding 'sleep infinity' so that the container does not turn off. Please show me the updated version.\n"                        
-                        elif second_test_result == 30:
+                        elif is_k8s_config_error_code(second_test_result):
                             inform_message = 'While configure VNF with your code, I got this error. \n'
                         elif second_test_result == 33:
                             container, error_code, error_message = second_message
@@ -220,7 +220,7 @@ def multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,sy
                             f.write('Config test failled. Results:\n')
                             f.write(errorcode_dict[second_test_result]+'\n')
                             f.write(second_message+'\n')
-                        if  ragging and second_test_result in [30, 33]:
+                        if  ragging and (is_k8s_config_error_code(second_test_result) or second_test_result == 33):
                             # VNF configuration related docs are not crawled yet. only StackOverflow                            
                             retrieved_docs=RAG.RAG_search(second_message, collection, embed_model, logging_, vnf_name=vnf)
                             retrieved_texts='And here are some related documents. Please refer to them.\n'

@@ -128,7 +128,7 @@ def select_request_message(test_result: int, form: str, vnf: str, server_or_mess
         else:
             inform_message = "After I run your code, the container exited."                             
         request_message = "Please modify your code by adding 'sleep infinity' so that the container does not turn off. Please show me the updated version.\n"                        
-    elif test_result == 30:
+    elif is_k8s_config_error_code(test_result):
         inform_message = 'While configure VNF with your code, I got this error. \n'
         error_message = server_or_message
     elif test_result == 33:

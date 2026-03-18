@@ -45,9 +45,9 @@ def read_mop_file(file_path: str, system_name: str, test:bool = False) -> list[s
     # Just be simple
     if test:
         mop_len = len(mop_list)
-        #mop_list = mop_list[:int(mop_len/8)]  # Test with 1/8 MOPs
+        mop_list = mop_list[:int(mop_len/8)]  # Test with 1/8 MOPs
         mop_list = random.sample(mop_list, len(mop_list)) # Shuffle the list
-        mop_list = mop_list[:5] # Test with 5 MOPs
+        #mop_list = mop_list[:5] # Test with 5 MOPs
 
     mop_data = []
     for mop_file in mop_list:
@@ -157,13 +157,26 @@ def get_reward_from_llm_response(answer: str, form: str, vnf: str, model_name: s
         elif second_test_result == 2: #VNF does not work as intended
             reward = 0.9
         
-        elif second_test_result in [30, 31, 32, 33]:
-            if second_test_result in [30, 33]: # Error occur while VNF configuring, Container error, error while searching Pod
-                reward = 0.5
-            elif second_test_result == 31: #Can't find Pod(wron namespace or wrong host name)
+        elif second_test_result in [31, 32, 33] or is_k8s_config_error_code(second_test_result):
+            if second_test_result == 31: #Can't find Pod(wrong namespace or wrong host name)
                 reward = 0.6
-            else: # 32. code need to include 'sliiep infinity' to container keep on.
+            elif second_test_result == 32: # code need to include 'sleep infinity' to container keep on.
                 reward = 0.8
+            elif second_test_result == 33:
+                # Container process failed after deployment.
+                reward = 0.45
+            elif second_test_result in [60, 61]:
+                # Kubelet/API connectivity timeout: usually infrastructure-side and less attributable to generated code.
+                reward = 0.65
+            elif second_test_result in [62, 63, 69]:
+                # API failure but not timeout (or unknown class): medium severity.
+                reward = 0.55
+            elif second_test_result == 64:
+                # Error-like pattern found in pod logs: often indicates actual config/runtime issue.
+                reward = 0.5
+            else:
+                # Fallback for backward compatibility (legacy 30, etc.)
+                reward = 0.5
         else:
             print('## Unknown error code from configuration test:', second_test_result)
             return None
