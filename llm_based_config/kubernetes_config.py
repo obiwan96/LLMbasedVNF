@@ -89,17 +89,23 @@ class OutputCollector:
         if 'stdout' in event_data and event_data['stdout']:
             self.captured_output+=event_data['stdout']
 
-def get_pod_logs(v1, pod_name, namespace= namespace):
+def get_pod_logs(v1, pod_name, namespace= namespace, return_error=False):
     try:
         logs = v1.read_namespaced_pod_log(name=pod_name, namespace=namespace)
-        return logs
+        if return_error:
+            return logs or "", None
+        return logs or ""
     
     except ApiException as e:
-        print(f"Exception when reading logs in pod {pod_name}: {e}")
-
+        error_message = f"Exception when reading logs in pod {pod_name}: {e}"
+        print(error_message)
+        if return_error:
+            return "", error_message
+        return ""
+    
 def check_log_error(logs):
     if not logs:
-        return False
+        return None
     error_words=['error ', 'error:', 'error!']
     # This is because of some apt library include 'error' in the name, ex) liberror-perl
     for error_word in error_words:
@@ -110,7 +116,7 @@ def check_log_error(logs):
         return logs.find('ERR')
     if  'Err' in logs:
         return logs.find('Err')
-    return False
+    return None
 
 def return_error_logs(logs):
     logs = logs.split('\n')
@@ -369,7 +375,7 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
             pod = v1.read_namespaced_pod(name=pod_name, namespace=namespace)
         except:
             return 31, None
-        for container in pod.status.container_statuses:
+        for container in (pod.status.container_statuses or []):
             container_name = container.name
             container_state = container.last_state
 
@@ -390,7 +396,7 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
                 pass
         logs = get_pod_logs(v1, pod_name, namespace)
         error_index = check_log_error(logs)
-        if error_index:
+        if error_index is not None:
             return 30, logs[max(error_index-5, 0):]
         if time.time() - start_time > wait_time:
             # error or exit did not occur while wait_time
@@ -409,10 +415,12 @@ def test_K8S_configuration(pod_name, vnf, v1, namespace, wait_time=150):
             if not "sleep infinity" in processes:
                 return 32, None
         else:
-            logs = get_pod_logs(v1, pod_name, namespace)
+            logs, log_read_error = get_pod_logs(v1, pod_name, namespace, return_error=True)
             error_index = check_log_error(logs)
-            if error_index:
+            if error_index is not None:
                 return 30,  str(result.stderr) +  '\n' + logs[max(error_index-5, 0):]
+            if log_read_error:
+                return 30, str(result.stderr) + '\n' + log_read_error
             return 30, str(result.stderr) + '\n' + logs[-5:]
 
     except Exception as e:

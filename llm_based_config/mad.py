@@ -252,7 +252,7 @@ def multi_agent_debate(mop_file_path, mop_list, model_list,num_ctx_list, form,sy
                     if ragging and ('Ansible runner status:' in str(server_or_message) or 'but Pod got error: ' in str(server_or_message)):
                         # ToDo: currently consider only K8S. need to fix to consider OpenStack also.
                         error_start = check_log_error(str(server_or_message))
-                        if error_start:
+                        if error_start is not None:
                             error_logs = '\n'.join(return_error_logs(str(server_or_message)))
                             retrieved_texts=RAG.RAG_search(error_logs, collection, embed_model, logging_, vnf_name=vnf)
                         else:
