@@ -39,14 +39,14 @@ def build_enc(tokenizer, prompt_text: str, max_input_tokens: int = 8192):
     )
     return {"input_ids": enc}
 
-def read_mop_file(file_path: str, system_name: str, test:bool = False) -> list[str]:
+def read_mop_file(file_path: str, system_name: str, test:int = None) -> list[str]:
     mop_list = [file_name for file_name in os.listdir(file_path)]
 
     # Just be simple
     if test:
         mop_len = len(mop_list)
-        mop_list = mop_list[:int(mop_len/8)]  # Test with 1/8 MOPs
         mop_list = random.sample(mop_list, len(mop_list)) # Shuffle the list
+        mop_list = mop_list[:int(mop_len/test)]  # Test with 1/test MOPs
         #mop_list = mop_list[:5] # Test with 5 MOPs
 
     mop_data = []

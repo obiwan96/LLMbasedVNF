@@ -13,6 +13,7 @@ import re
 import copy
 import math
 from datetime import datetime
+import json
 
 from RAG import RAG
 from kubernetes_config import *
@@ -41,7 +42,7 @@ from prompt import namespace
 
 
 logging.getLogger("paramiko").setLevel(logging.CRITICAL) 
-from generate_pair_DPO import generate_io_pairs
+from generate_pair_DPO import generate_io_pairs, _normalize_dpo_rows, _print_category_stats, parse_reasoning_and_final, filter_rows_by_token_length
 from RL_config import hf_cache_path, bnb_config, SYSTEM_MESSAGE, get_response_from_llm, get_reward_from_llm_response, read_mop_file
 
 def shape_reward(r):
@@ -159,6 +160,7 @@ def evaluate_llm(
     temperature: float = 0.3,
     top_p: float = 0.8,
     device: Optional[str] = None,
+    using_cot: bool = False,
     ):
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -194,6 +196,8 @@ def evaluate_llm(
         lang = single_mop_data['lang']
         vm_name = single_mop_data['vm_name']
         answer = get_response_from_llm(model, tokenizer, max_new_tokens, temperature, top_p, prompt)
+        if using_cot:
+            answer = parse_reasoning_and_final(answer)[1]
         success, test_result = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
         if success == 1.0:
             success_num+=1
@@ -202,6 +206,8 @@ def evaluate_llm(
             inform_message, request_message, error_message =  select_request_message(status_code, form, vnf, server_or_message, collection, embed_model)
             prompt = prompt+answer+inform_message+error_message+request_message
             answer = get_response_from_llm(model, tokenizer, max_new_tokens, temperature, top_p, prompt)
+            if using_cot:
+                answer = parse_reasoning_and_final(answer)[1]
             success, test_result = get_reward_from_llm_response(answer, form, vnf, model_name, vm_num, k8s_client, namespace)
             if success == 1.0:
                 success_num+=1
@@ -339,6 +345,7 @@ def train_grpo(
     scale_rewards: str = "group",      # "group"(기본) / "batch" / False 등
     log_completions: bool = False,
     num_completions_to_print: int = 0,
+    using_cot:bool =False,
     ):
     gc.collect()
     torch.cuda.empty_cache()
@@ -406,6 +413,8 @@ def train_grpo(
             prompts = [p for p in prompts for _ in range(reps)]
         for v, comp, prompt in zip(vnf, completions, prompts):
             #print(f"## VNF: {v}, #prompts: {len(prompt)}, #completions: {len(comp)}")
+            if using_cot:
+                comp = parse_reasoning_and_final(comp)[1]
             raw, _ = get_reward_from_llm_response(comp, form, v, model_name, {v:1}, k8s_client, namespace, logging=True)
             raw_rewards.append(float(raw))
             shaped.append(5.0*float(shape_reward(raw)))
@@ -447,7 +456,7 @@ def train_grpo(
         logging_dir=output_dir_logs,
 
         # generation 관련
-        max_prompt_length=8192, 
+        max_prompt_length=6500, 
         generation_batch_size=num_generations*num_prompts_per_step,
         num_generations=num_generations,
         max_completion_length=max_new_tokens,
@@ -507,6 +516,7 @@ def train_grpo_trajectory(
     scale_rewards: str = "group",
     log_completions: bool = True,
     num_completions_to_print: int = 0,
+    using_cot:bool =False,
 ):
     gc.collect()
     torch.cuda.empty_cache()
@@ -528,6 +538,8 @@ def train_grpo_trajectory(
         bias="none",
         task_type="CAUSAL_LM",
     )
+    if using_cot:
+        max_new_tokens += 300
 
     model = AutoModelForCausalLM.from_pretrained(
         model_path_or_id,
@@ -598,6 +610,8 @@ def train_grpo_trajectory(
                 #print(f"## VNF: {v}, #completions: {len(comp)}")
 
             # ---- r1 ----
+            if using_cot:
+                a1 = parse_reasoning_and_final(a1)[1]
             r1, _ = get_reward_from_llm_response(a1, form, v, model_name,{v: 1}, k8s_client, namespace, logging=False)
             if r1 == 1.0:
                 r1 += bonus_reward # 성공 보너스
@@ -605,6 +619,8 @@ def train_grpo_trajectory(
             # ---- r2 ----
             r2 = 0.0
             if a2 is not None:
+                if using_cot:
+                    a2 = parse_reasoning_and_final(a2)[1]
                 r2, _ = get_reward_from_llm_response(a2, form, v, model_name,{v: 1}, k8s_client, namespace, logging=False)
                 r2 -= cost_reward  # RAG 비용 패널티
             total_reward = r1 + gamma * r2
@@ -800,6 +816,7 @@ def train_dpo(
     beta: float = 0.03,
     device: Optional[str] = None,
     logging_steps: int = 1,
+    using_cot: bool = False,
 ):
     """
     dpo_rows(list of dict)로 Dataset 만든 뒤 TRL의 DPOTrainer로 학습합니다.
@@ -810,17 +827,35 @@ def train_dpo(
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # 1) Dataset 구성
-    train_dataset = Dataset.from_list(dpo_rows)
-
-    # 2) 모델/토크나이저 로드
     tokenizer = AutoTokenizer.from_pretrained(model_path_or_id, cache_dir=hf_cache_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+
+    # 1) Dataset 구성
+    if using_cot:
+        dpo_rows = _normalize_dpo_rows(dpo_rows, tokenizer=tokenizer, shuffle=True, print_token_stats=True)
+        max_prompt_length = 4608
+        max_length=6656
+        dpo_rows, overflow_rows = filter_rows_by_token_length(
+            dpo_rows,
+            tokenizer=tokenizer,
+            max_prompt_length=max_prompt_length,
+            max_length=max_length,
+            drop_overflow=True,
+        )
+        _print_category_stats(dpo_rows)
+    else:
+        max_prompt_length=8192
+        max_length=8192+512
+    train_dataset = Dataset.from_list(dpo_rows)
+
+    # 2) 모델/토크나이저 로드
     lora_config = LoraConfig(
         r=16,
         lora_alpha=32,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj",
+        ],
         lora_dropout=0.05,
         bias="none",
         task_type="CAUSAL_LM",
@@ -842,6 +877,8 @@ def train_dpo(
         remove_unused_columns=False,
         logging_steps=logging_steps,
         logging_dir=output_dir_logs,
+        max_prompt_length=max_prompt_length,
+        max_length=max_length,
         report_to='tensorboard',
         save_steps=200,
     )
@@ -867,8 +904,9 @@ if __name__ == '__main__':
     argparser.add_argument('--traj', action= 'store_true', help='Use trajectory RL')
     argparser.add_argument('--load-data', type=str, default=None, help='Path to the DPO dataset to load')
     argparser.add_argument('--load-model', type=str, default=None, help='Path to the model to load')
-    argparser.add_argument('--test', action='store_true', help='Test with small number of MOPs for quick run')
+    argparser.add_argument('--test',  type=int, help='Test with subsampled MOP data by a factor of N.')
     argparser.add_argument('--evaluate-first', action='store_true', help='Evaluate the base model before training')
+    argparser.add_argument('--cot', action='store_true', help='Use chain-of-thought prompting')
 
     argparser=argparser.parse_args()
     #mop_file_path = '../mop/Intergrated/'
@@ -893,38 +931,47 @@ if __name__ == '__main__':
             k8s_client=(v1,apps_v1),
             form=form,
             max_new_tokens=1000,
+            using_cot=argparser.cot,
         )
     if 'dpo' in argparser.method:
         dpo_data_num = 200
         current_data_num = 0
-        if argparser.load_data is not None:
-            import pickle
-            with open(argparser.load_data, 'rb') as f:
-                input_io_pairs = pickle.load(f)
-            current_data_num = len(input_io_pairs)
-            print (f'Loaded {current_data_num} IO pairs from {argparser.load_data}')
-        while current_data_num < dpo_data_num:
-            from generate_pair_DPO import generate_io_pairs
-            new_input_io_pairs = generate_io_pairs(
-                model_path_or_id=model_path_or_id,
-                mop_data=mop_data,
-                k8s_client=(v1,apps_v1),
-                form=form,
-                max_new_tokens=1000,
-            )
-            input_io_pairs = input_io_pairs + new_input_io_pairs if current_data_num > 0 else new_input_io_pairs
-            current_data_num = len(input_io_pairs)
-        input_io_pairs = input_io_pairs[:dpo_data_num]
-        print (f'[INFO] Total {len(input_io_pairs)} IO pairs ready for DPO training.')
-        with open('tmp/dpo_dataset.pkl' , 'wb') as f:
-            import pickle
-            pickle.dump(input_io_pairs, f)
+        if argparser.cot:
+            if argparser.load_data is None:
+                print('CoT data set need to be loaded')
+                exit(1)
+            with open(argparser.load_data, 'r', encoding='utf-8') as f:
+                input_io_pairs = json.load(f)
+        else:
+            if argparser.load_data is not None:
+                import pickle
+                with open(argparser.load_data, 'rb') as f:
+                    input_io_pairs = pickle.load(f)
+                current_data_num = len(input_io_pairs)
+                print (f'Loaded {current_data_num} IO pairs from {argparser.load_data}')
+            while current_data_num < dpo_data_num:
+                from generate_pair_DPO import generate_io_pairs
+                new_input_io_pairs = generate_io_pairs(
+                    model_path_or_id=model_path_or_id,
+                    mop_data=mop_data,
+                    k8s_client=(v1,apps_v1),
+                    form=form,
+                    max_new_tokens=1000,
+                )
+                input_io_pairs = input_io_pairs + new_input_io_pairs if current_data_num > 0 else new_input_io_pairs
+                current_data_num = len(input_io_pairs)
+            input_io_pairs = input_io_pairs[:dpo_data_num]
+            print (f'[INFO] Total {len(input_io_pairs)} IO pairs ready for DPO training.')
+            with open('tmp/dpo_dataset.pkl' , 'wb') as f:
+                import pickle
+                pickle.dump(input_io_pairs, f)
         train_dpo(
             model_path_or_id=model_path_or_id,
             dpo_rows=input_io_pairs,
             output_dir='./tmp/dpo_qwen2.5_7b_k8s',
             per_device_train_batch_size=1,
             num_train_epochs=3,
+            using_cot=argparser.cot,
         )
         model_path_or_id='./tmp/dpo_qwen2.5_7b_k8s'
     if 'ppo' in argparser.method:
@@ -957,6 +1004,7 @@ if __name__ == '__main__':
                 num_prompts_per_step=num_prompts_per_step, 
                 grad_accum=2,
                 max_new_tokens=1000,
+                using_cot=argparser.cot,
             )
             model_path_or_id='./tmp/grpo_traj_qwen2.5_7b_k8s'        
         else:
@@ -971,6 +1019,7 @@ if __name__ == '__main__':
                 num_prompts_per_step=num_prompts_per_step,
                 grad_accum=2,
                 max_new_tokens=1000,
+                using_cot=argparser.cot,
             )
             model_path_or_id='./tmp/grpo_qwen2.5_7b_k8s'
     new_success_rate = evaluate_llm(
@@ -980,6 +1029,7 @@ if __name__ == '__main__':
         k8s_client=(v1,apps_v1),
         form=form,
         max_new_tokens=1000,
+        using_cot=argparser.cot,
     )
     if original_success_rate is not None:
         print (f'[INFO] Success rate improved from {original_success_rate:.2%} to {new_success_rate:.2%} after training.')

@@ -285,6 +285,84 @@ def weaken_reasoning(reasoning: str) -> str:
     return weakened
 
 
+def _print_category_stats(rows: List[Dict[str, str]]) -> None:
+    print(f"## Total normalized DPO rows: {len(rows)}")
+    category_count = {}
+    for row in rows:
+        cat = row.get("category", "unknown")
+        category_count[cat] = category_count.get(cat, 0) + 1
+    print("\n## DPO category distribution")
+    total = len(rows)
+    for k, v in sorted(category_count.items(), key=lambda x: x[0]):
+        ratio = (v / total * 100.0) if total > 0 else 0.0
+        print(f"  - {k}: {v} ({ratio:.2f}%)")
+
+def filter_rows_by_token_length(
+    rows: List[Dict[str, str]],
+    tokenizer,
+    max_prompt_length: int,
+    max_length: int,
+    drop_overflow: bool = False,
+):
+    def tok_len(text: str) -> int:
+        return len(tokenizer(text, add_special_tokens=False)["input_ids"])
+
+    kept = []
+    overflow = []
+
+    for row in rows:
+        p_len = tok_len(row["prompt"])
+        c_len = tok_len(row["chosen"])
+        r_len = tok_len(row["rejected"])
+
+        is_overflow = (
+            p_len > max_prompt_length or
+            (p_len + c_len) > max_length or
+            (p_len + r_len) > max_length
+        )
+
+        row_with_len = dict(row)
+        row_with_len["prompt_tokens"] = p_len
+        row_with_len["chosen_tokens"] = c_len
+        row_with_len["rejected_tokens"] = r_len
+
+        if is_overflow:
+            overflow.append(row_with_len)
+            if not drop_overflow:
+                kept.append(row_with_len)
+        else:
+            kept.append(row_with_len)
+
+    print("\n## Length filtering summary")
+    print(f"  - total_rows: {len(rows)}")
+    print(f"  - overflow_rows: {len(overflow)}")
+    print(f"  - kept_rows: {len(kept)}")
+    print(f"  - drop_overflow: {drop_overflow}")
+
+    if overflow:
+        print("\n## Top overflow examples")
+        overflow_sorted = sorted(
+            overflow,
+            key=lambda x: max(
+                x["prompt_tokens"],
+                x["prompt_tokens"] + x["chosen_tokens"],
+                x["prompt_tokens"] + x["rejected_tokens"],
+            ),
+            reverse=True,
+        )
+
+        for i, row in enumerate(overflow_sorted[:5], 1):
+            preview = row["prompt"][:200].replace("\n", " ")
+            print(
+                f"  [{i}] "
+                f"prompt={row['prompt_tokens']}, "
+                f"prompt+chosen={row['prompt_tokens'] + row['chosen_tokens']}, "
+                f"prompt+rejected={row['prompt_tokens'] + row['rejected_tokens']} | "
+                f"preview={preview}"
+            )
+
+    return kept, overflow
+
 # =========================
 # Candidate generation / evaluation
 # =========================
@@ -409,6 +487,168 @@ def print_word_diff(text1, text2):
         elif tag == 'insert':
             print(f"➕ 추가: '{b_part}'")
 
+def _print_token_stats(
+    rows: List[Dict[str, str]],
+    tokenizer,
+    num_examples_to_show: int = 3,
+) -> None:
+    """
+    prompt 기준 token 길이 통계 출력
+    - 평균
+    - 최장
+    - 최단
+    - 상위 몇 개 예시
+    """
+    if not rows:
+        print("## No rows for token stats.")
+        return
+
+    def get_len(text: str) -> int:
+        return len(tokenizer(text, add_special_tokens=False)["input_ids"])
+
+    # =========================
+    # 1) 길이 수집
+    # =========================
+    prompt_lens = []
+    chosen_lens = []
+    rejected_lens = []
+
+    prompt_pairs = []
+    chosen_pairs = []
+    rejected_pairs = []
+
+    for row in rows:
+        prompt = row["prompt"]
+        chosen = row["chosen"]
+        rejected = row["rejected"]
+
+        p_len = get_len(prompt)
+        c_len = get_len(chosen)
+        r_len = get_len(rejected)
+
+        prompt_lens.append(p_len)
+        chosen_lens.append(c_len)
+        rejected_lens.append(r_len)
+
+        prompt_pairs.append((prompt, p_len))
+        chosen_pairs.append((chosen, c_len))
+        rejected_pairs.append((rejected, r_len))
+
+    # =========================
+    # 2) 통계 출력
+    # =========================
+    def print_basic_stats(name, lens):
+        avg_len = sum(lens) / len(lens)
+        print(f"\n## {name} token statistics")
+        print(f"  - count: {len(lens)}")
+        print(f"  - avg: {avg_len:.2f}")
+        print(f"  - min: {min(lens)}")
+        print(f"  - max: {max(lens)}")
+
+    print_basic_stats("PROMPT", prompt_lens)
+    print_basic_stats("CHOSEN (completion)", chosen_lens)
+    print_basic_stats("REJECTED (completion)", rejected_lens)
+
+    # =========================
+    # 3) longest examples 출력
+    # =========================
+    def print_top_examples(name, pairs):
+        pairs.sort(key=lambda x: x[1], reverse=True)
+
+        print(f"\n## Top {min(num_examples_to_show, len(pairs))} longest {name}")
+        for i, (text, length) in enumerate(pairs[:num_examples_to_show], 1):
+            preview = text[:300].replace("\n", " ")
+            print(f"  [{i}] tokens={length} | preview={preview}")
+
+    print_top_examples("PROMPT", prompt_pairs)
+    print_top_examples("CHOSEN", chosen_pairs)
+    print_top_examples("REJECTED", rejected_pairs)
+
+    # =========================
+    # 4) DPO에서 중요한 pair 길이도 추가
+    # =========================
+    pair_chosen_lens = [p + c for p, c in zip(prompt_lens, chosen_lens)]
+    pair_rejected_lens = [p + r for p, r in zip(prompt_lens, rejected_lens)]
+
+    print_basic_stats("PROMPT+CHOSEN", pair_chosen_lens)
+    print_basic_stats("PROMPT+REJECTED", pair_rejected_lens)
+
+def _normalize_dpo_rows(
+    dpo_rows: List[Dict[str, str]],
+    tokenizer=None,
+    shuffle: bool = True,
+    seed: int = 42,
+    print_token_stats: bool = True,
+) -> List[Dict[str, str]]:
+    """
+    입력 row를 TRL DPOTrainer가 쓰기 좋은 형태로 정리.
+    추가로 prompt token 길이 통계도 출력 가능.
+
+    기대 입력 예:
+      {
+        "input": "...",
+        "chosen": "...",
+        "rejected": "...",
+        "category": "direct_vs_strong",
+      }
+
+    출력:
+      {
+        "prompt": "...",
+        "chosen": "...",
+        "rejected": "...",
+        "category": "...",
+      }
+    """
+    normalized = []
+    seen = set()
+
+    skipped_empty = 0
+    skipped_same = 0
+    skipped_dup = 0
+
+    for row in dpo_rows:
+        prompt = row.get("prompt", row.get("input", "")).strip()
+        chosen = row.get("chosen", "").strip()
+        rejected = row.get("rejected", "").strip()
+        category = row.get("category", "unknown")
+
+        if not prompt or not chosen or not rejected:
+            skipped_empty += 1
+            continue
+
+        if chosen == rejected:
+            skipped_same += 1
+            continue
+
+        key = (prompt, chosen, rejected)
+        if key in seen:
+            skipped_dup += 1
+            continue
+        seen.add(key)
+
+        normalized.append({
+            "prompt": prompt,
+            "chosen": chosen,
+            "rejected": rejected,
+            "category": category,
+        })
+
+    if shuffle:
+        random.seed(seed)
+        random.shuffle(normalized)
+
+    print("\n## DPO row normalization summary")
+    print(f"  - input_rows: {len(dpo_rows)}")
+    print(f"  - kept_rows: {len(normalized)}")
+    print(f"  - skipped_empty: {skipped_empty}")
+    print(f"  - skipped_same_chosen_rejected: {skipped_same}")
+    print(f"  - skipped_duplicates: {skipped_dup}")
+
+    if tokenizer is not None and print_token_stats:
+        _print_token_stats(normalized, tokenizer)
+
+    return normalized
 
 def save_cot_data(cot_data_list, filename):
     """
@@ -453,7 +693,7 @@ def generate_cot_dpo_pairs(
     temperature: float = 0.4,
     top_p: float = 0.9,
     device: Optional[str] = None,
-    steps: int = 2,
+    steps: int = 5,
     samples_per_prompt: int = 6,
     target_ratios: Optional[Dict[str, float]] = None,
     seed: int = 42,
@@ -583,7 +823,16 @@ def generate_cot_dpo_pairs(
                 else:
                     failing_candidates.append(candidate)
                     print(f"  - FAIL | style={style} | score={score_strong_cot_candidate(candidate)}")
-
+            if idx%20==19:
+                print(f"\n{idx+1}th work end. total {success_num} camdidates created.")
+                category_map = {
+                    "direct_vs_strong": direct_vs_strong_pairs,
+                    "weak_vs_strong": weak_vs_strong_pairs,
+                    "wrong_vs_correct": wrong_vs_correct_pairs,
+                    "verified_vs_unverified": verified_vs_unverified_pairs,
+                }
+                with open(f'tmp/cot_dpo_candidates_{system_name}_{form}.json', 'w') as f:
+                    json.dump(category_map, f, indent=2)
             # 2) strong chosen 선정
             best_pass = select_best_passing_candidate(passing_candidates)
             if best_pass is None:
@@ -669,16 +918,7 @@ def generate_cot_dpo_pairs(
                             "rejected": rejected_unverified,
                             "category": "verified_vs_unverified",
                         })
-            if idx%20==19:
-                print(f"\n{idx+1}th work end. total {success_num} camdidates created.")
-                category_map = {
-                    "direct_vs_strong": direct_vs_strong_pairs,
-                    "weak_vs_strong": weak_vs_strong_pairs,
-                    "wrong_vs_correct": wrong_vs_correct_pairs,
-                    "verified_vs_unverified": verified_vs_unverified_pairs,
-                }
-                with open(f'tmp/cot_dpo_candidates_{system_name}_{form}.json', 'w') as f:
-                    json.dump(category_map, f, indent=2)
+            
     # =========================================================
     # Ratio balancing
     # =========================================================
@@ -735,15 +975,17 @@ if __name__ == "__main__":
     argparser = argparse.ArgumentParser()
     argparser.add_argument('--Ansible', action='store_true')
     argparser.add_argument('--Python', action='store_true')
-    argparser.add_argument('--test', action='store_true', help='Test with small number of MOPs for quick run')
+    argparser.add_argument('--test', type=int, help='Test with subsampled MOP data by a factor of N.')
+    argparser.add_argument('--steps', type=int, help='Steps num. for CoT generation')
     argparser=argparser.parse_args()
     mop_file_path = '../data_generating/data_v3/'
+    #mop_file_path = '../mop/Intergrated/'
     system_name='Kubernetes'
     config.load_kube_config()
     v1 = client.CoreV1Api()
     apps_v1 = client.AppsV1Api()
     form='Python' if argparser.Python else 'Ansible'
-    mop_data = read_mop_file(mop_file_path,system_name, test=argparser.test)
+    mop_data = read_mop_file(mop_file_path,system_name, test=argparser.test if argparser.test else None)
     model_name = 'qwen3.5:35b'
     model_way = 'Ollama'
     k8s_client = (v1, apps_v1)
@@ -754,5 +996,6 @@ if __name__ == "__main__":
         k8s_client=k8s_client,
         namespace=namespace,
         form=form,
+        steps=argparser.steps if argparser.steps else 5,
         max_new_tokens=800)
     save_cot_data(generated_pairs, f'cot_dpo_pairs_{system_name}_{form}.json')
