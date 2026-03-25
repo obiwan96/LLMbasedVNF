@@ -5,6 +5,7 @@ from docx import Document
 from prompt import prompt
 from openstack_config import * 
 from kubernetes_config import *
+from typing import Dict
 prompts_1, prompts_2, example_data = prompt('Python', 'Kubernetes') # Prompots for each language and system.
 good_example, good_example_prefix, goood_example_suffix = example_data
 hf_cache_path = '/storage3/hf_cache/'
@@ -37,6 +38,8 @@ def build_enc(tokenizer, prompt_text: str, max_input_tokens: int = 8192):
         return_tensors="pt",
         max_length=max_input_tokens,
     )
+    if hasattr(enc, "input_ids"):
+        enc = enc["input_ids"]
     return {"input_ids": enc}
 
 def read_mop_file(file_path: str, system_name: str, test:int = None) -> list[str]:
@@ -88,45 +91,34 @@ def read_mop_file(file_path: str, system_name: str, test:int = None) -> list[str
 def get_response_from_llm(model, tokenizer, max_new_tokens, temperature, top_p, prompt, do_sample=False) -> str:
     #assert tokenizer.name_or_path == model.config.name_or_path
     enc = build_enc(tokenizer, prompt, max_input_tokens=8192)
+    input_ids = enc["input_ids"]
+    if hasattr(input_ids, "input_ids"):
+        input_ids = input_ids["input_ids"]
     first_device = next(model.parameters()).device
-    enc = {k: v.to(first_device) for k, v in enc.items()}
-    attention_mask = torch.ones_like(enc["input_ids"])
+    input_ids = input_ids.to(first_device)
+    attention_mask = torch.ones_like(input_ids)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    generation_config = copy.deepcopy(model.generation_config)
+    generation_config.max_new_tokens = max_new_tokens
+    generation_config.max_length = None
+    generation_config.pad_token_id = tokenizer.eos_token_id
+    generation_config.eos_token_id = tokenizer.eos_token_id
+    generation_config.repetition_penalty = 1.1
+    if do_sample:
+        generation_config.temperature = temperature
+        generation_config.top_p = top_p
+        generation_config.top_k = 50
     with torch.no_grad():
-        if do_sample:        
-            out_ids = model.generate(
-                input_ids=enc["input_ids"].to(device),
-                attention_mask=attention_mask.to(device),
-                max_new_tokens=max_new_tokens,
-                do_sample=do_sample,
-                temperature=temperature,
-                top_p=top_p,
-                pad_token_id=tokenizer.eos_token_id,
-                top_k = 50,
-                repetition_penalty=1.1,
-                eos_token_id=tokenizer.eos_token_id
-            )
-        else:        
-            out_ids = model.generate(
-                input_ids=enc["input_ids"].to(device),
-                attention_mask=attention_mask.to(device),
-                max_new_tokens=max_new_tokens,
-                do_sample=do_sample,
-                pad_token_id=tokenizer.eos_token_id,
-                repetition_penalty=1.1,
-                eos_token_id=tokenizer.eos_token_id
-            )
+        out_ids = model.generate(
+            input_ids=input_ids.to(device),
+            attention_mask=attention_mask.to(device),
+            generation_config=generation_config,
+            do_sample=do_sample,
+        )
 
-    # 보통 decoded에는 prompt+answer가 같이 들어있으므로,
-    # prompt를 제거해서 "answer만" 분리해두는게 실용적입니다.
-
-    input_len = enc["input_ids"].shape[1]
-    output_len = out_ids.shape[1]
-    #print("\n##>> input_len:", input_len, "output_len:", output_len, "new_tokens:", output_len - input_len)
+    input_len = input_ids.shape[1]
     gen_ids = out_ids[0][input_len:]
-    # 디코딩
     answer = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
-
     return answer
 
 def get_reward_from_llm_response(answer: str, form: str, vnf: str, model_name: str, vm_num: dict, k8s_client, namespace: str, logging:bool=False, use_whole_code = False) -> float:
@@ -183,7 +175,9 @@ def get_reward_from_llm_response(answer: str, form: str, vnf: str, model_name: s
     else:
         with open(logging_file, 'a') as f:
             f.write('## Creation failed')
-        if test_result == 10: #Code parsing fail
+        if test_result == 1: #Can't find code in LLM's response
+            reward = 0.0
+        elif test_result == 10: #Code parsing fail
             reward = 0.05
         elif test_result == 14: #'create_pod' does not exist in code
             reward = 0.1
@@ -215,3 +209,78 @@ def get_reward_from_llm_response(answer: str, form: str, vnf: str, model_name: s
         second_test_result = test_result
     delete_all_pods(v1, apps_v1, namespace=namespace)
     return reward, (second_test_result, second_message)
+
+def calculate_dynamic_params(
+    data_size: int,
+    training_type: str = "grpo",
+    using_cot: bool = False,
+) -> Dict[str, int]:
+    """
+    데이터 양과 GPU 메모리에 따라 학습 파라미터를 동적으로 계산합니다.
+    
+    Args:
+        data_size: 학습 데이터 개수
+        training_type: "grpo", "dpo", "grpo_trajectory" 중 하나
+        using_cot: CoT 방식 사용 여부 (메모리 증가)
+    
+    Returns:
+        {"batch_size": int, "num_generations": int, "num_prompts_per_step": int, 
+         "grad_accum": int, "max_new_tokens": int, "steps": int}
+    """
+    params = {}
+    if training_type == "dpo":
+        # DPO는 chosen/rejected와 reference log-prob까지 함께 계산하므로
+        # GRPO보다도 시퀀스 길이와 배치 크기에 민감합니다.
+        if data_size <= 100:
+            params = {
+                "batch_size": 1,
+                "grad_accum": 8,
+                "steps": 10,
+            }
+        elif data_size <= 500:
+            params = {
+                "batch_size": 1,
+                "grad_accum": 16,
+                "steps": 20,
+            }
+        else:
+            params = {
+                "batch_size": 1,
+                "grad_accum": 16,
+                "steps": 30,
+            }
+            
+    elif training_type == "grpo" or training_type == "grpo_trajectory":
+        # GRPO는 generation KV cache가 지배적이라, Unsloth를 써도
+        # rollout 병렬도와 출력 길이는 보수적으로 잡아야 OOM을 피할 수 있습니다.
+        
+        if data_size <= 50:
+            params = {
+                "batch_size": 2,
+                "num_generations": 4,
+                "num_prompts_per_step": 2,
+                "grad_accum": 4,
+                "steps": 50,
+            }
+        elif data_size <= 200:
+            params = {
+                "batch_size": 1,
+                "num_generations": 4,
+                "num_prompts_per_step": 1,
+                "grad_accum": 8,
+                "steps": 80,
+            }
+        else:  # data_size > 200
+            params = {
+                "batch_size": 1,
+                "num_generations": 2,
+                "num_prompts_per_step": 1,
+                "grad_accum": 8,
+                "steps": int(data_size * 0.8), # 데이터에 비례하여 스텝 수 증가
+            }
+    params['max_prompt_length'] = 6500
+    base_tokens = 1024+500 if using_cot else 1024
+    params['max_new_tokens'] = base_tokens
+    print(f"\n[UNSLOTH PARAMS] Data size: {data_size}, Type: {training_type}, CoT: {using_cot}")
+    print(f"[UNSLOTH PARAMS] Calculated params: {params}")
+    return params

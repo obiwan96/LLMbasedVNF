@@ -19,8 +19,12 @@ A preliminary version covering OpenStack-based experiments has been published.
 ## 📌 System Architecture
 
 ### Requriements:
+We use Python=3.11
+TRL and Unsloth are updated weekly, so I have included the specific versions I use in the requirements.txt file. However, they may still fail to install in your environment.
 ```bash
-pip install paramiko python-openstackclient python-docx ansible_runner astor torch pytz tqdm kubernetes trl datasets peft bitsandbytes nltk matplotlib chromadb sentence-transformers
+pip install paramiko python-openstackclient python-docx ansible_runner astor pytz tqdm kubernetes trl datasets peft bitsandbytes nltk matplotlib chromadb transformers huggingface_hub sentence-transformers llama-cpp-python llm-blender mergekit tensorboard weave langchain-community
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
  ```
 
 The current prototype consists of the following major modules:

@@ -24,6 +24,8 @@ __pycache__/
 tmp/
 data/
 secret.py
+llm_based_config/unsloth_compiled_cache
+llm_based_config/hf_cache
 llm_based_config/RAG/evaluation_data/
 !llm_based_config/RAG/evaluation_data/bad_log_linked.json
 !llm_based_config/RAG/evaluation_data/processed_log.json
