@@ -150,6 +150,44 @@ def select_request_message(test_result: int, form: str, vnf: str, server_or_mess
         request_message='Please correct your code and return the updated version by refering MOP again to configure VNF correctly.\n'
     return inform_message, request_message, error_message
 
+def _load_hf_eval_model(model_path_or_id: str, hf_cache_path: str):
+    adapter_config_path = os.path.join(model_path_or_id, "adapter_config.json")
+    tokenizer_source = model_path_or_id
+
+    if os.path.isdir(model_path_or_id) and os.path.exists(adapter_config_path):
+        peft_config = PeftConfig.from_pretrained(model_path_or_id)
+        base_model_path = peft_config.base_model_name_or_path
+        print(f"[INFO] Loading evaluation model from PEFT adapter: {model_path_or_id}")
+        print(f"[INFO] Adapter base model: {base_model_path}")
+        if not os.path.exists(os.path.join(model_path_or_id, "tokenizer_config.json")):
+            tokenizer_source = base_model_path
+        base_model = AutoModelForCausalLM.from_pretrained(
+            base_model_path,
+            cache_dir=hf_cache_path,
+            quantization_config=bnb_config,
+            device_map="auto",
+            torch_dtype=torch.bfloat16,
+        )
+        model = PeftModel.from_pretrained(base_model, model_path_or_id, is_trainable=False)
+    else:
+        print(f"[INFO] Loading evaluation model directly from: {model_path_or_id}")
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path_or_id,
+            cache_dir=hf_cache_path,
+            quantization_config=bnb_config,
+            device_map="auto",
+            torch_dtype=torch.bfloat16,
+        )
+
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, cache_dir=hf_cache_path)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+    model.eval()
+    if hasattr(model, "config"):
+        model.config.use_cache = True
+    return model, tokenizer
+
 def evaluate_llm(
     model_path_or_id: str,
     mop_data: List[Dict[str, str]],
@@ -168,7 +206,6 @@ def evaluate_llm(
         device = "cuda" if torch.cuda.is_available() else "cpu"
     gc.collect()
     torch.cuda.empty_cache()
-    tokenizer = AutoTokenizer.from_pretrained(model_path_or_id, cache_dir=hf_cache_path)
     if retry:
         #RAG initiation
         db_list=['RAG/stackoverflow_docs.db', 'RAG/kubernetes_docs.db']
@@ -176,12 +213,8 @@ def evaluate_llm(
             db_list.append('RAG/ansible_docs.db')
         collection, embed_model = RAG.RAG_init(db_list, embed_model='fine-tuned', new=True)
     v1, apps_v1 = k8s_client
-    # decoder-only 모델의 padding 문제 방지
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(model_path_or_id, quantization_config=bnb_config,device_map="auto",cache_dir=hf_cache_path)
-    model.eval()
+    model, tokenizer = _load_hf_eval_model(model_path_or_id, hf_cache_path)
 
     results: List[Dict[str, str]] = []
     vm_num = {}
@@ -1222,6 +1255,7 @@ if __name__ == '__main__':
     argparser.add_argument('--evaluate-first', action='store_true', help='Evaluate the base model before training')
     argparser.add_argument('--cot', action='store_true', help='Use chain-of-thought prompting')
     argparser.add_argument('--unsloth', action='store_true', help='Loading model from Unsloth training')
+    argparser.add_argument('--no-eval', action='store_true', help='Skip evaluation after training')
 
     argparser=argparser.parse_args()
     #mop_file_path = '../mop/Intergrated/'
@@ -1388,15 +1422,16 @@ if __name__ == '__main__':
                 using_cot=argparser.cot,
             )
         model_path_or_id=str(output_path)
-    new_success_rate = evaluate_llm(
-        model_path_or_id=model_path_or_id,
-        mop_data=mop_data,
-        retry=argparser.RAG,
-        k8s_client=(v1,apps_v1),
-        form=form,
-        max_prompt_length=max_prompt_length,
-        max_new_tokens=max_new_tokens,
-        using_cot=argparser.cot,
-    )
-    if original_success_rate is not None:
-        print (f'[INFO] Success rate improved from {original_success_rate:.2%} to {new_success_rate:.2%} after training.')
+    if not argparser.no_eval:
+        new_success_rate = evaluate_llm(
+            model_path_or_id=model_path_or_id,
+            mop_data=mop_data,
+            retry=argparser.RAG,
+            k8s_client=(v1,apps_v1),
+            form=form,
+            max_prompt_length=max_prompt_length,
+            max_new_tokens=max_new_tokens,
+            using_cot=argparser.cot,
+        )
+        if original_success_rate is not None:
+            print (f'[INFO] Success rate improved from {original_success_rate:.2%} to {new_success_rate:.2%} after training.')

@@ -681,6 +681,7 @@ if __name__ == '__main__':
     argparser.add_argument('--test',  type=int, help='Test with subsampled MOP data by a factor of N.')
     argparser.add_argument('--evaluate-first', action='store_true', help='Evaluate the base model before training')
     argparser.add_argument('--cot', action='store_true', help='Use chain-of-thought prompting')
+    argparser.add_argument('--no-eval', action='store_true', help='Skip evaluation after training')
 
     argparser=argparser.parse_args()
     #mop_file_path = '../mop/Intergrated/'
@@ -810,15 +811,17 @@ if __name__ == '__main__':
                 using_cot=argparser.cot,
             )
             model_path_or_id='./tmp/grpo_' + argparser.model + '_k8s'
-    new_success_rate = evaluate_llm(
-        model_path_or_id=model_path_or_id,
-        mop_data=mop_data,
-        retry=argparser.RAG,
-        k8s_client=(v1,apps_v1),
+
+    if not argparser.no_eval:
+        new_success_rate = evaluate_llm(
+            model_path_or_id=model_path_or_id,
+            mop_data=mop_data,
+            retry=argparser.RAG,
+            k8s_client=(v1,apps_v1),
         form=form,
         max_prompt_length=max_prompt_length,
         max_new_tokens=max_new_tokens,
         using_cot=argparser.cot,
     )
-    if original_success_rate is not None:
-        print (f'[INFO] Success rate improved from {original_success_rate:.2%} to {new_success_rate:.2%} after training.')
+        if original_success_rate is not None:
+            print (f'[INFO] Success rate improved from {original_success_rate:.2%} to {new_success_rate:.2%} after training.')
