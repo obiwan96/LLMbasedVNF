@@ -985,7 +985,7 @@ if __name__ == "__main__":
     v1 = client.CoreV1Api()
     apps_v1 = client.AppsV1Api()
     form='Python' if argparser.Python else 'Ansible'
-    mop_data = read_mop_file(mop_file_path,system_name, test=argparser.test if argparser.test else None)
+    mop_data = read_mop_file(mop_file_path,form,system_name, test=argparser.test if argparser.test else None)
     model_name = 'qwen3.5:35b'
     model_way = 'Ollama'
     k8s_client = (v1, apps_v1)

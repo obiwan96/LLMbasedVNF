@@ -4,7 +4,7 @@ from unsloth import FastLanguageModel
 from curses import raw
 import argparse
 import os
-os.environ["TRANSFORMERS_CACHE"]        = "/storage1/hf_cache/transformers"
+os.environ["HF_HOME"]        = "/storage2/obiwan/hf_cache"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"          # 선택
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
@@ -581,6 +581,7 @@ def train_dpo(
         dtype = torch.bfloat16,       # BF16 자동 적용
         load_in_4bit = True,          # 4-bit 양자화 로드 (QLoRA)
         cache_dir = hf_cache_path,
+        device_map='auto',
     )
 
     if tokenizer.pad_token is None:
@@ -692,11 +693,11 @@ if __name__ == '__main__':
     apps_v1 = client.AppsV1Api()
     form='Python' if argparser.Python else 'Ansible'
 
-    mop_data = read_mop_file(mop_file_path, system_name, test=argparser.test)
+    mop_data = read_mop_file(mop_file_path, form, system_name, test=argparser.test)
 
     model_list = {'llama3.1':"unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit",
                   'qwen2.5-coder':"unsloth/Qwen2.5-Coder-7B-Instruct-bnb-4bit",
-                  'qwen3.5':"unsloth/Qwen3.5-9B-Instruct-bnb-4bit",
+                  'qwen3.5':"unsloth/Qwen3.5-9B",
                   'gpt-oss':"unsloth/gpt-oss-20b-bnb-4bit",
                   'mistral':"unsloth/Mistral-Nemo-Instruct-2407-bnb-4bit",
                   'qwen3.5-claude4.6': 'Jackrong/Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-GGUF'}
@@ -761,7 +762,7 @@ if __name__ == '__main__':
         train_dpo(
             model_path_or_id=model_path_or_id,
             dpo_rows=input_io_pairs,
-            output_dir='./tmp/dpo_' + argparser.model + '_k8s',
+            output_dir='./tmp/' + ('cot_' if argparser.cot else '') + 'dpo_' + argparser.model + '_k8s',
             per_device_train_batch_size=dpo_params["batch_size"],
             gradient_accumulation_steps=dpo_params["grad_accum"],
             num_train_epochs=dpo_params["steps"],
@@ -775,12 +776,12 @@ if __name__ == '__main__':
         torch.cuda.empty_cache()
         print("[INFO] Memory cleaned up after DPO training.")
         print(f"[INFO] GPU memory after cleanup: {torch.cuda.memory_allocated()/1024**3:.2f} GB allocated, {torch.cuda.memory_reserved()/1024**3:.2f} GB reserved.")
-        model_path_or_id='./tmp/dpo_' + argparser.model + '_k8s'
+        model_path_or_id='./tmp/' + ('cot_' if argparser.cot else '') + 'dpo_' + argparser.model + '_k8s'
     
     if 'grpo' in argparser.method:
         print(f"[INFO] Starting GRPO training. GPU memory: {torch.cuda.memory_allocated()/1024**3:.2f} GB allocated, {torch.cuda.memory_reserved()/1024**3:.2f} GB reserved.")
         # GRPO 파라미터 동적 계산
-        grpo_training_type = "grpo_trajectory" if argparser.traj else "grpo"
+        grpo_training_type = "grpo"
         grpo_params = calculate_dynamic_params(
             data_size=len(mop_data),
             training_type=grpo_training_type,
@@ -788,12 +789,6 @@ if __name__ == '__main__':
         )
         max_prompt_length = grpo_params["max_prompt_length"]
         max_new_tokens = grpo_params["max_new_tokens"]
-        
-        if argparser.test:
-            # 테스트 모드에서는 동적 계산 값을 무시하고 작은 값으로 설정
-            grpo_params["steps"] = 2
-            grpo_params["num_generations"] = 4
-            grpo_params["num_prompts_per_step"] = 2
              
         else:
             train_grpo(
@@ -801,7 +796,7 @@ if __name__ == '__main__':
                 mop_data=mop_data,
                 k8s_client=(v1,apps_v1),
                 form=form,
-                output_dir='./tmp/grpo_' + argparser.model + '_k8s',
+                output_dir='./tmp/' + ('cot_' if argparser.cot else '') + 'grpo_' + argparser.model + '_k8s',
                 steps=grpo_params["steps"],
                 num_generations=grpo_params["num_generations"],
                 num_prompts_per_step=grpo_params["num_prompts_per_step"],
@@ -810,7 +805,7 @@ if __name__ == '__main__':
                 max_new_tokens=max_new_tokens,
                 using_cot=argparser.cot,
             )
-            model_path_or_id='./tmp/grpo_' + argparser.model + '_k8s'
+            model_path_or_id='./tmp/' + ('cot_' if argparser.cot else '') + 'grpo_' + argparser.model + '_k8s'
 
     if not argparser.no_eval:
         new_success_rate = evaluate_llm(

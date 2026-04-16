@@ -3,7 +3,7 @@ from curses import raw
 #from langchain.chat_models import ChatOpenAI
 import argparse
 import os
-os.environ["TRANSFORMERS_CACHE"]        = "/storage1/hf_cache/transformers"
+os.environ["HF_HOME"]        = "/storage2/obiwan/hf_cache"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"          # 선택
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
@@ -1017,8 +1017,8 @@ def train_grpo_trajectory_based_unsloth(
     k8s_client,
     form: str = "Python",
     gamma: float = 0.7,
-    bonus_reward: float = 0.3,
-    cost_reward: float = 0.1,
+    bonus_reward: float = 0.5,
+    cost_reward: float = 0.2,
     output_dir: str = "./tmp/grpo-traj-out",
     learning_rate: float = 1e-5,
     beta_kl: float = 0.005,
@@ -1266,7 +1266,7 @@ if __name__ == '__main__':
     apps_v1 = client.AppsV1Api()
     form='Python' if argparser.Python else 'Ansible'
 
-    mop_data = read_mop_file(mop_file_path, system_name, test=argparser.test)
+    mop_data = read_mop_file(mop_file_path, form, system_name, test=argparser.test)
     if argparser.load_model is not None:
         model_path_or_id=argparser.load_model
     else:
@@ -1326,7 +1326,7 @@ if __name__ == '__main__':
             using_cot=argparser.cot
         )
         output_path = Path(model_path_or_id)
-        output_path = output_path.with_name('dpo_' + output_path.name)
+        output_path = output_path.with_name(( 'cot_' if argparser.cot else '' ) + 'dpo_' + output_path.name)
         train_dpo(
             model_path_or_id=model_path_or_id,
             dpo_rows=input_io_pairs,
@@ -1345,7 +1345,7 @@ if __name__ == '__main__':
         model_path_or_id=str(output_path)
     if 'ppo' in argparser.method:
         output_path = Path(model_path_or_id)
-        output_path = output_path.with_name('ppo_' + output_path.name)
+        output_path = output_path.with_name(( 'cot_' if argparser.cot else '' ) +'ppo_' + output_path.name)
         train_ppo(
             model_path_or_id=model_path_or_id,
             mop_data=mop_data,
@@ -1365,15 +1365,18 @@ if __name__ == '__main__':
             using_cot=argparser.cot
         )
         
-        if argparser.test:
-            # 테스트 모드에서는 동적 계산 값을 무시하고 작은 값으로 설정
-            grpo_params["steps"] = 2
-            grpo_params["num_generations"] = 4
-            grpo_params["num_prompts_per_step"] = 2
-        
         if argparser.traj:
+            # Trajectory GRPO는 메모리 사용이 높으므로 추가 조정
+            grpo_params["batch_size"] = 1
+            grpo_params["num_generations"] = 2  # 더 줄임
+            grpo_params["num_prompts_per_step"] = 2  # generation_batch_size를 global batch size로 나누어떨어지게 함
+            grpo_params["grad_accum"] = 16  # 더 늘림
+            grpo_params["steps"] = min(grpo_params["steps"], 40)  # 스텝 수 제한
+            grpo_params["max_new_tokens"] = 500  # 줄임
+            grpo_params["max_prompt_length"] = 8000  # 늘림 (RAG로 프롬프트가 길어짐)
+            
             output_path = Path(model_path_or_id)
-            output_path = output_path.with_name('grpo_traj_' + output_path.name)
+            output_path = output_path.with_name(( 'cot_' if argparser.cot else '' ) +'grpo_traj_' + output_path.name)
             if argparser.unsloth:
                 train_grpo_trajectory_based_unsloth(
                     model_path_or_id=model_path_or_id,
@@ -1406,7 +1409,7 @@ if __name__ == '__main__':
                 )
         else:
             output_path = Path(model_path_or_id)
-            output_path = output_path.with_name('grpo_' + output_path.name)
+            output_path = output_path.with_name(( 'cot_' if argparser.cot else '' ) +'grpo_' + output_path.name)
             train_grpo(
                 model_path_or_id=model_path_or_id,
                 mop_data=mop_data,

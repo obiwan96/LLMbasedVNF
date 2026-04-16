@@ -5,11 +5,9 @@ from docx import Document
 from prompt import prompt
 from openstack_config import * 
 from kubernetes_config import *
+import copy
 from typing import Dict
-prompts_1, prompts_2, example_data = prompt('Python', 'Kubernetes') # Prompots for each language and system.
-good_example, good_example_prefix, goood_example_suffix = example_data
-hf_cache_path = '/storage3/hf_cache/'
-
+hf_cache_path = "/storage2/obiwan/hf_cache"
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
     bnb_4bit_quant_type="nf4",
@@ -42,7 +40,9 @@ def build_enc(tokenizer, prompt_text: str, max_input_tokens: int = 8192):
         enc = enc["input_ids"]
     return {"input_ids": enc}
 
-def read_mop_file(file_path: str, system_name: str, test:int = None) -> list[str]:
+def read_mop_file(file_path: str, form:str, system_name: str, test:int = None) -> list[str]:
+    prompts_1, prompts_2, example_data = prompt(form, system_name) # Prompots for each language and system.
+    good_example, good_example_prefix, goood_example_suffix = example_data
     mop_list = [file_name for file_name in os.listdir(file_path)]
 
     # Just be simple
